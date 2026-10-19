@@ -13,6 +13,8 @@ RUN dotnet publish src/ForexHitl.Client/ForexHitl.Client.csproj -c Release -o /c
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
+# Fail the image build if its runtime ever loses the timezone data required by the schedule.
+RUN test -f /usr/share/zoneinfo/Australia/Melbourne
 COPY --from=build /out ./
 
 # Render's default web service port. Persistent state goes to /app/data (mount a disk there).

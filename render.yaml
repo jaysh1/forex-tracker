@@ -16,6 +16,18 @@ services:
     envVars:
       - key: OANDA_ENVIRONMENT
         value: practice
+      - key: TRADING_TIME_ZONE
+        value: Australia/Melbourne
+      - key: TRADING_START
+        value: "09:00"
+      - key: TRADING_END
+        value: "17:00"
+      - key: TRADING_DAYS
+        value: Monday,Tuesday,Wednesday,Thursday,Friday
+      - key: SUPABASE_URL
+        sync: false            # optional; set with SUPABASE_SECRET_KEY to use external state
+      - key: SUPABASE_SECRET_KEY
+        sync: false            # server secret only, never a browser publishable key
       - key: OANDA_API_TOKEN
         sync: false            # Render prompts for these on first creation
       - key: OANDA_ACCOUNT_ID

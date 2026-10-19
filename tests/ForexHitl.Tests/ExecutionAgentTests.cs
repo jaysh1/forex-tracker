@@ -70,13 +70,13 @@ internal sealed class Harness
     // 1.5 x 6 pip ATR = a 9 pip stop.
     public static readonly Signal BuySignal = new(Side.Buy, 0.0006m, "test signal");
 
-    public Harness()
+    public Harness(TradingSchedule? schedule = null, IStateStore? state = null)
     {
         Activity = new ActivityLog(Clock);
         var gatekeeper = new GatekeeperAgent(Broker, Calendar, Clock);
         Agent = new ExecutionAgent(
-            Broker, gatekeeper, new DailyRiskGuard(), Store, Activity, Notifier, Clock,
-            NullLogger<ExecutionAgent>.Instance);
+            Broker, gatekeeper, state is null ? new DailyRiskGuard() : new DailyRiskGuard(state), Store, Activity, Notifier, Clock,
+            NullLogger<ExecutionAgent>.Instance, schedule ?? new TradingSchedule());
     }
 
     public Task Propose() => Agent.ProposeAsync("EUR_USD", BuySignal, CancellationToken.None);

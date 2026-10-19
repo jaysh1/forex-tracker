@@ -22,12 +22,15 @@ public sealed class ExecutionAgent
     private readonly IApprovalNotifier _notifier;
     private readonly TimeProvider _time;
     private readonly ILogger<ExecutionAgent> _log;
+    private readonly TradingSchedule _schedule;
+    private volatile string? _riskStateError;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private volatile StatusSnapshot? _lastStatus;
 
     public ExecutionAgent(
         IBrokerClient broker, GatekeeperAgent gatekeeper, DailyRiskGuard guard, PendingTradeStore store,
-        ActivityLog activity, IApprovalNotifier notifier, TimeProvider time, ILogger<ExecutionAgent> log)
+        ActivityLog activity, IApprovalNotifier notifier, TimeProvider time, ILogger<ExecutionAgent> log,
+        TradingSchedule schedule)
     {
         _broker = broker;
         _gatekeeper = gatekeeper;
@@ -37,19 +40,38 @@ public sealed class ExecutionAgent
         _notifier = notifier;
         _time = time;
         _log = log;
+        _schedule = schedule;
     }
 
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     /// <summary>Latest account/guard status for the UI; null until the scanner has completed one tick.</summary>
     public StatusSnapshot? LastStatus => _lastStatus;
+    public string? RiskStateError => _riskStateError;
+
+    private async Task<GuardStatus> EvaluateGuardAsync(decimal equity, DateTime now, CancellationToken ct)
+    {
+        try
+        {
+            var status = await _guard.EvaluateAsync(equity, now, ct);
+            _riskStateError = null;
+            return status;
+        }
+        catch
+        {
+            _riskStateError = "Risk state unavailable. Trading paused until state can be loaded and saved.";
+            throw;
+        }
+    }
 
     /// <summary>Evaluates the daily caps against live equity and announces a new lockout once.</summary>
     public async Task<GuardStatus> RefreshGuardAsync(CancellationToken ct)
     {
         var acct = await _broker.GetAccountAsync(ct);
-        var status = _guard.Evaluate(acct.Nav, Now);
-        _lastStatus = new StatusSnapshot(Now, acct.Nav, status.DayPnl, status.CanTrade, status.Reason);
+        var status = await EvaluateGuardAsync(acct.Nav, Now, ct);
+        var open = _schedule.IsOpen(Now);
+        _lastStatus = new StatusSnapshot(Now, acct.Nav, status.DayPnl, status.CanTrade && open,
+            status.Reason ?? (open ? null : _schedule.ClosedReason));
 
         if (status.NewlyLocked)
         {
@@ -57,7 +79,7 @@ public sealed class ExecutionAgent
             _activity.Add("lock", status.Reason ?? "Trading locked");
             await _notifier.NotifyAsync("Trading paused", status.Reason ?? "Trading locked", urgent: true, ct);
         }
-        return status;
+        return status with { CanTrade = status.CanTrade && open, Reason = _lastStatus.Reason };
     }
 
     public async Task ProposeAsync(string instrument, Signal signal, CancellationToken ct)
@@ -65,10 +87,11 @@ public sealed class ExecutionAgent
         await _gate.WaitAsync(ct);
         try
         {
+            if (!_schedule.IsOpen(Now)) return;
             if (_store.HasPending(instrument)) return;
 
             var acct = await _broker.GetAccountAsync(ct);
-            if (!_guard.Evaluate(acct.Nav, Now).CanTrade) return;
+            if (!(await EvaluateGuardAsync(acct.Nav, Now, ct)).CanTrade) return;
             if (await _broker.HasOpenPositionAsync(instrument, ct)) return;
 
             var gate = await _gatekeeper.CheckAsync(instrument, ct);
@@ -88,6 +111,7 @@ public sealed class ExecutionAgent
                 return;
             }
 
+            if (!_schedule.IsOpen(Now)) return; // network checks may straddle closing time
             _store.Add(proposal);
             _activity.Add("proposal",
                 $"{instrument} {proposal.Side} {proposal.Units:N0} units, risk ${F(proposal.RiskUsd)} - waiting for your approval");
@@ -129,9 +153,10 @@ public sealed class ExecutionAgent
 
             var now = Now;
             if (now - p.CreatedUtc > ProposalTtl) return Refuse(p, "Proposal expired");
+            if (!_schedule.IsOpen(now)) return Refuse(p, _schedule.ClosedReason);
 
             var acct = await _broker.GetAccountAsync(ct);
-            var status = _guard.Evaluate(acct.Nav, now);
+            var status = await EvaluateGuardAsync(acct.Nav, now, ct);
             if (!status.CanTrade) return Refuse(p, $"Trading locked: {status.Reason}");
 
             var gate = await _gatekeeper.CheckAsync(p.Instrument, ct);
@@ -159,6 +184,7 @@ public sealed class ExecutionAgent
                 RiskUsd = Math.Round(RiskManager.RiskUsd(p.Instrument, units, p.StopLossPips, fx), 2)
             };
             OrderResult result;
+            if (!_schedule.IsOpen(Now)) return Refuse(p, _schedule.ClosedReason);
             try
             {
                 result = await _broker.PlaceMarketOrderAsync(order, ct);

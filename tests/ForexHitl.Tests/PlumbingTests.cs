@@ -4,9 +4,10 @@ namespace ForexHitl.Tests;
 
 internal sealed class FakeClock : TimeProvider
 {
-    private DateTimeOffset _now = new(2026, 10, 14, 10, 0, 0, TimeSpan.Zero);
+    private DateTimeOffset _now = new(2026, 10, 14, 0, 0, 0, TimeSpan.Zero);
     public override DateTimeOffset GetUtcNow() => _now;
     public void Advance(TimeSpan by) => _now += by;
+    public void SetUtc(DateTimeOffset now) => _now = now.ToUniversalTime();
 }
 
 public class SessionAuthTests

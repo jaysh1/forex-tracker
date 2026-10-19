@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 
 namespace ForexHitl;
 
@@ -22,17 +21,14 @@ public sealed class GuardState
 public sealed class DailyRiskGuard
 {
     private static readonly TimeSpan SessionRollover = TimeSpan.FromHours(22);
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly IStateStore _store;
+    private GuardState _state = new();
+    private bool _loaded;
 
-    private readonly object _gate = new();
-    private readonly string? _statePath;
-    private readonly GuardState _state;
+    public DailyRiskGuard(string? statePath = null) : this(new FileStateStore(statePath)) { }
 
-    public DailyRiskGuard(string? statePath = null)
-    {
-        _statePath = statePath;
-        _state = Load(statePath);
-    }
+    public DailyRiskGuard(IStateStore store) => _store = store;
 
     public static DateTime SessionStart(DateTime nowUtc)
     {
@@ -40,25 +36,42 @@ public sealed class DailyRiskGuard
         return DateTime.SpecifyKind(shifted.Date, DateTimeKind.Utc) + SessionRollover;
     }
 
-    public GuardStatus Evaluate(decimal equity, DateTime nowUtc)
+    // Kept for callers using a local file; runtime paths use the asynchronous method below.
+    public GuardStatus Evaluate(decimal equity, DateTime nowUtc) =>
+        EvaluateAsync(equity, nowUtc, CancellationToken.None).GetAwaiter().GetResult();
+
+    public async Task<GuardStatus> EvaluateAsync(decimal equity, DateTime nowUtc, CancellationToken ct)
     {
-        lock (_gate)
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            var changed = false;
+            if (equity <= 0) throw new InvalidOperationException("Account equity must be positive.");
+            if (!_loaded)
+            {
+                var saved = await _store.LoadAsync<GuardState>("guard", ct).ConfigureAwait(false);
+                if (saved is not null)
+                {
+                    if (saved.StartEquity <= 0 || saved.SessionStartUtc == default ||
+                        saved.SessionStartUtc.Kind != DateTimeKind.Utc || saved.SessionStartUtc != SessionStart(saved.SessionStartUtc) ||
+                        saved.SessionStartUtc > SessionStart(nowUtc) ||
+                        (saved.LockedUntilUtc is { } untilUtc && (untilUtc.Kind != DateTimeKind.Utc || string.IsNullOrWhiteSpace(saved.LockReason))))
+                        throw new InvalidDataException("Invalid saved risk state. Trading is paused; inspect the stored state.");
+                    _state = saved;
+                }
+                _loaded = true;
+            }
             var session = SessionStart(nowUtc);
 
             if (_state.StartEquity <= 0 || _state.SessionStartUtc != session)
             {
                 _state.SessionStartUtc = session;
                 _state.StartEquity = equity;
-                changed = true;
             }
 
             if (_state.LockedUntilUtc is { } until && until <= nowUtc)
             {
                 _state.LockedUntilUtc = null;
                 _state.LockReason = null;
-                changed = true;
             }
 
             var pnl = equity - _state.StartEquity;
@@ -84,37 +97,17 @@ public sealed class DailyRiskGuard
                     newlyLocked = true;
                 }
 
-                changed |= newlyLocked;
             }
 
-            if (changed) Save();
+            // Confirm durable storage on every evaluation, including immediately before an approval.
+            // If saving fails, retain the exact in-memory baseline/lock and retry it next time.
+            await _store.SaveAsync("guard", _state, ct).ConfigureAwait(false);
 
             return new GuardStatus(_state.LockedUntilUtc is null, _state.LockReason, pnl, newlyLocked);
         }
+        finally { _gate.Release(); }
     }
 
     private static string F(decimal v) => v.ToString("F2", CultureInfo.InvariantCulture);
 
-    private static GuardState Load(string? path)
-    {
-        if (path is null || !File.Exists(path)) return new GuardState();
-        try
-        {
-            return JsonSerializer.Deserialize<GuardState>(File.ReadAllText(path)) ?? new GuardState();
-        }
-        catch (Exception ex) when (ex is JsonException or IOException)
-        {
-            return new GuardState();
-        }
-    }
-
-    private void Save()
-    {
-        if (_statePath is null) return;
-        var dir = Path.GetDirectoryName(Path.GetFullPath(_statePath));
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = _statePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(_state, JsonOptions));
-        File.Move(tmp, _statePath, overwrite: true);
-    }
 }

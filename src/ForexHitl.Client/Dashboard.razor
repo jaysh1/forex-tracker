@@ -28,6 +28,11 @@ else
 {
     <section class="card">
         <h2>Account</h2>
+        <p class="muted">Trading hours: @_state.Status.TradingHours</p>
+        @if (!_state.Status.CanTrade && _state.Status.Reason is not null)
+        {
+            <p class="warn">@_state.Status.Reason</p>
+        }
         @if (!_state.Status.Ready)
         {
             <p class="muted">Waiting for the first update from OANDA. If this lasts more than a minute, see Activity below and check your OANDA token and account ID.</p>
@@ -42,10 +47,6 @@ else
                 <dt>Trading</dt>
                 <dd>@(_state.Status.CanTrade ? "Active" : "Paused")</dd>
             </dl>
-            @if (!_state.Status.CanTrade && _state.Status.Reason is not null)
-            {
-                <p class="warn">@_state.Status.Reason</p>
-            }
             @if (StaleFor(_state.Status) is { } stale)
             {
                 <p class="warn">Scanner has not reported for @stale. It may be down or unable to reach OANDA - the figures above could be out of date. Check the server logs.</p>

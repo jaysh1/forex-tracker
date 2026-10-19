@@ -7,7 +7,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton(new DailyRiskGuard(config.GuardStatePath));
+builder.Services.AddSingleton(config.Schedule);
+if (config.SupabaseUrl is not null)
+{
+    builder.Services.AddHttpClient<SupabaseStateStore>(c => c.Timeout = TimeSpan.FromSeconds(15));
+    builder.Services.AddSingleton<IStateStore>(sp => sp.GetRequiredService<SupabaseStateStore>());
+}
+else
+    builder.Services.AddSingleton<IStateStore>(new FileStateStore(config.GuardStatePath));
+builder.Services.AddSingleton<DailyRiskGuard>(sp => new DailyRiskGuard(sp.GetRequiredService<IStateStore>()));
 builder.Services.AddSingleton<PendingTradeStore>();
 builder.Services.AddSingleton<ActivityLog>();
 builder.Services.AddSingleton<SessionAuth>();
@@ -27,6 +35,7 @@ else
 
 builder.Services.AddSingleton<GatekeeperAgent>();
 builder.Services.AddSingleton<ExecutionAgent>();
+builder.Services.AddHostedService<ActivityPersistence>();
 builder.Services.AddHostedService<TechnicalAnalyticsAgent>();
 
 var app = builder.Build();
@@ -90,9 +99,12 @@ secured.MapGet("/state", (
     ExecutionAgent execution, PendingTradeStore store, ActivityLog activity, AppConfig cfg, TimeProvider time) =>
 {
     var s = execution.LastStatus;
+    var now = time.GetUtcNow().UtcDateTime;
+    var open = cfg.Schedule.IsOpen(now);
+    var reason = execution.RiskStateError ?? s?.Reason ?? (open ? null : cfg.Schedule.ClosedReason);
     var status = new StatusDto(
         cfg.UseLive ? "live" : "practice", s is not null, s?.UpdatedUtc, s?.Equity, s?.DayPnl,
-        s?.CanTrade ?? true, s?.Reason, time.GetUtcNow().UtcDateTime);
+        (s?.CanTrade ?? false) && open && execution.RiskStateError is null, reason, now, cfg.Schedule.Description);
 
     var pending = store.Snapshot().Select(p => new PendingDto(
         p.Id, p.Instrument, p.Side.ToString(), p.Units, p.EntryPrice, p.StopLoss, p.TakeProfit,

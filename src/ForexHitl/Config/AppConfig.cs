@@ -15,6 +15,9 @@ public sealed record AppConfig(
 {
     public const int MinPasswordLength = 12;
     public const int MinNtfyTopicLength = 16;
+    public TradingSchedule Schedule { get; init; } = new();
+    public string? SupabaseUrl { get; init; }
+    public string? SupabaseKey { get; init; }
 
     public string OandaBaseUrl => UseLive
         ? "https://api-fxtrade.oanda.com/"
@@ -67,6 +70,21 @@ public sealed record AppConfig(
         var publicUrl = get("PUBLIC_BASE_URL")?.Trim().TrimEnd('/');
         var ntfyServer = (get("NTFY_SERVER") is { Length: > 0 } s ? s.Trim() : "https://ntfy.sh").TrimEnd('/');
 
+        var supabaseUrl = get("SUPABASE_URL")?.Trim();
+        var supabaseKey = get("SUPABASE_SECRET_KEY")?.Trim();
+        if (string.IsNullOrWhiteSpace(supabaseKey)) supabaseKey = get("SUPABASE_SERVICE_ROLE_KEY")?.Trim();
+        supabaseUrl = string.IsNullOrWhiteSpace(supabaseUrl) ? null : supabaseUrl;
+        supabaseKey = string.IsNullOrWhiteSpace(supabaseKey) ? null : supabaseKey;
+        if ((supabaseUrl is null) != (supabaseKey is null))
+            throw new InvalidOperationException("Set both SUPABASE_URL and SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY).");
+        if (supabaseUrl is not null)
+        {
+            if (!Uri.TryCreate(supabaseUrl, UriKind.Absolute, out var url) || url.Scheme != "https" ||
+                url.UserInfo.Length > 0 || url.Query.Length > 0 || url.Fragment.Length > 0 || url.AbsolutePath != "/")
+                throw new InvalidOperationException("SUPABASE_URL must be the HTTPS project URL with no path, query or credentials.");
+            ValidateSupabaseKey(supabaseKey!);
+        }
+
         return new AppConfig(
             Required("OANDA_API_TOKEN"),
             Required("OANDA_ACCOUNT_ID"),
@@ -77,6 +95,31 @@ public sealed record AppConfig(
             string.IsNullOrEmpty(publicUrl) ? null : publicUrl,
             instruments,
             calendarUrls,
-            get("GUARD_STATE_PATH") is { Length: > 0 } p ? p : "data/guard-state.json");
+            get("GUARD_STATE_PATH") is { Length: > 0 } p ? p : "data/guard-state.json")
+        {
+            Schedule = new TradingSchedule(get("TRADING_TIME_ZONE") ?? "Australia/Melbourne",
+                get("TRADING_START") ?? "09:00", get("TRADING_END") ?? "17:00",
+                get("TRADING_DAYS") ?? "Monday,Tuesday,Wednesday,Thursday,Friday"),
+            SupabaseUrl = supabaseUrl,
+            SupabaseKey = supabaseKey
+        };
+    }
+
+    private static void ValidateSupabaseKey(string key)
+    {
+        if (key.Any(char.IsWhiteSpace)) throw new InvalidOperationException("Supabase key contains whitespace.");
+        if (key.StartsWith("sb_secret_", StringComparison.Ordinal) && key.Length > "sb_secret_".Length) return;
+        // Reject anon/publishable keys early. Supabase, not this parser, verifies JWT signatures.
+        try
+        {
+            var parts = key.Split('.');
+            if (parts.Length != 3) throw new FormatException();
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight((payload.Length + 3) / 4 * 4, '=');
+            using var json = System.Text.Json.JsonDocument.Parse(Convert.FromBase64String(payload));
+            if (json.RootElement.GetProperty("role").GetString() == "service_role") return;
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { }
+        throw new InvalidOperationException("Use a server-side sb_secret_ key or legacy service_role JWT, never an anon/publishable key.");
     }
 }
