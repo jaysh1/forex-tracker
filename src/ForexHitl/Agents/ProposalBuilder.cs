@@ -8,7 +8,7 @@ public static class ProposalBuilder
     public const decimal MaxStopPips = 40m;
 
     public static TradeProposal? Build(string instrument, Signal signal, Quote quote, decimal equity, DateTime nowUtc,
-        decimal usdToAccount = 1m)
+        decimal usdToAccount = 1m, decimal maxRiskPerTrade = RiskManager.DefaultMaxRiskPerTrade)
     {
         var pip = Instruments.PipSize(instrument);
         var dir = signal.Side == Side.Buy ? 1m : -1m;
@@ -18,7 +18,7 @@ public static class ProposalBuilder
             Math.Clamp(signal.Atr * AtrStopMultiple, MinStopPips * pip, MaxStopPips * pip), 5);
         var slPips = slDist / pip;
 
-        var units = RiskManager.CalculateUnits(instrument, equity, slPips, entry, usdToAccount);
+        var units = RiskManager.CalculateUnits(instrument, equity, slPips, entry, usdToAccount, maxRiskPerTrade);
         if (units < 1) return null;
 
         return new TradeProposal(

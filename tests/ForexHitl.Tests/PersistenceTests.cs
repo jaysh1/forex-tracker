@@ -561,6 +561,17 @@ public class SupabaseAndHoursConfigTests
         Assert.Null(c.SupabaseUrl);
         Assert.Null(c.SupabaseSecretKey);
         Assert.Equal("Mon-Fri 09:00-17:00 Australia/Melbourne", c.TradingHours.Describe());
+        Assert.Equal(50m, c.MaxRiskPerTrade);
+    }
+
+    [Fact]
+    public void MaxRiskPerTrade_IsConfigurableAndMustBePositive()
+    {
+        var config = AppConfig.FromEnvironment(Env(new() { ["MAX_RISK_PER_TRADE"] = "25.50" }));
+        Assert.Equal(25.50m, config.MaxRiskPerTrade);
+
+        Rejected(new() { ["MAX_RISK_PER_TRADE"] = "0" });
+        Rejected(new() { ["MAX_RISK_PER_TRADE"] = "not-a-number" });
     }
 
     [Fact]

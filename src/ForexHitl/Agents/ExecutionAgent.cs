@@ -24,13 +24,15 @@ public sealed class ExecutionAgent
     private readonly ILogger<ExecutionAgent> _log;
     private readonly GuardPersistence? _persistence;
     private readonly TradingWindow _window;
+    private readonly decimal _maxRiskPerTrade;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private volatile StatusSnapshot? _lastStatus;
 
     public ExecutionAgent(
         IBrokerClient broker, GatekeeperAgent gatekeeper, DailyRiskGuard guard, PendingTradeStore store,
         ActivityLog activity, IApprovalNotifier notifier, TimeProvider time, ILogger<ExecutionAgent> log,
-        GuardPersistence? persistence = null, TradingWindow? tradingWindow = null)
+        GuardPersistence? persistence = null, TradingWindow? tradingWindow = null,
+        decimal maxRiskPerTrade = RiskManager.DefaultMaxRiskPerTrade)
     {
         _broker = broker;
         _gatekeeper = gatekeeper;
@@ -42,6 +44,7 @@ public sealed class ExecutionAgent
         _log = log;
         _persistence = persistence;
         _window = tradingWindow ?? TradingWindow.Always;
+        _maxRiskPerTrade = maxRiskPerTrade;
     }
 
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
@@ -100,7 +103,7 @@ public sealed class ExecutionAgent
             }
 
             var fx = await AccountCurrency.GetUsdToAccountAsync(_broker, acct.Currency, ct);
-            var proposal = ProposalBuilder.Build(instrument, signal, gate.Quote!, acct.Nav, Now, fx);
+            var proposal = ProposalBuilder.Build(instrument, signal, gate.Quote!, acct.Nav, Now, fx, _maxRiskPerTrade);
             if (proposal is null)
             {
                 _log.LogInformation("{Instrument} signal skipped: cannot size within risk/leverage limits", instrument);
@@ -169,7 +172,7 @@ public sealed class ExecutionAgent
             // Equity and the exchange rate move between proposal and approval. Re-size against today's numbers:
             // never larger than what was approved, and refuse if it would have to shrink by more than 5%.
             var fx = await AccountCurrency.GetUsdToAccountAsync(_broker, acct.Currency, ct);
-            var maxUnits = RiskManager.CalculateUnits(p.Instrument, acct.Nav, p.StopLossPips, live, fx);
+            var maxUnits = RiskManager.CalculateUnits(p.Instrument, acct.Nav, p.StopLossPips, live, fx, _maxRiskPerTrade);
             var units = Math.Min(p.Units, maxUnits);
             if (units < 1 || units < p.Units * 0.95m)
                 return Refuse(p, "Equity or the exchange rate has moved since the proposal, so the approved size is no longer within 0.5% risk");

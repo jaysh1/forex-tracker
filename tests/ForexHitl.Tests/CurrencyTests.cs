@@ -48,11 +48,11 @@ public class AudAccountSizingTests
 
         Assert.True(aud < usd);
         var riskAud = RiskManager.RiskUsd("EUR_USD", aud, 9m, AudFx);
-        Assert.True(riskAud <= 500m);
-        Assert.True(riskAud > 499m);
+        Assert.True(riskAud <= 50m);
+        Assert.True(riskAud > 49m);
 
-        // The unconverted size would have risked about 50% more than the 0.5% budget.
-        Assert.True(RiskManager.RiskUsd("EUR_USD", usd, 9m, AudFx) > 750m);
+        // A USD-sized position converts to more than the same 50-unit account-currency cap in AUD.
+        Assert.True(RiskManager.RiskUsd("EUR_USD", usd, 9m, AudFx) > 75m);
     }
 
     [Fact]
@@ -70,8 +70,8 @@ public class AudAccountSizingTests
 
         var p = await h.ProposeOne();
 
-        Assert.True(p.RiskUsd <= 500m);
-        Assert.True(p.RiskUsd > 499m);
+        Assert.True(p.RiskUsd <= 50m);
+        Assert.True(p.RiskUsd > 49m);
         Assert.True(p.Units < 400_000);     // naive USD sizing would give ~555,000
     }
 
@@ -87,7 +87,7 @@ public class AudAccountSizingTests
 
         Assert.True(result.Executed);
         var o = h.Broker.Orders.Single();
-        Assert.True(RiskManager.RiskUsd("EUR_USD", o.Units, o.StopLossPips, AudFx) <= 500m);
+        Assert.True(RiskManager.RiskUsd("EUR_USD", o.Units, o.StopLossPips, AudFx) <= 50m);
     }
 
     [Fact]
@@ -124,6 +124,6 @@ public class AudAccountSizingTests
         Assert.True(result.Executed);
         var o = h.Broker.Orders.Single();
         Assert.True(o.Units < p.Units);
-        Assert.True(RiskManager.RiskUsd("EUR_USD", o.Units, o.StopLossPips, 1m / 0.64500m) <= 500m);
+        Assert.True(RiskManager.RiskUsd("EUR_USD", o.Units, o.StopLossPips, 1m / 0.64500m) <= 50m);
     }
 }
