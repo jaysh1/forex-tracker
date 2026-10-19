@@ -12,6 +12,23 @@ public class RiskManagerTests
     }
 
     [Fact]
+    public void LargeBalance_IsCappedAtFiftyAccountCurrencyUnits()
+    {
+        Assert.Equal(50m, RiskManager.AllowedDollarRisk(100_000m));
+        var units = RiskManager.CalculateUnits("EUR_USD", 100_000m, 9m, 1.085m);
+        Assert.True(RiskManager.RiskUsd("EUR_USD", units, 9m) <= 50m);
+        Assert.True(RiskManager.RiskUsd("EUR_USD", units, 9m) > 49m);
+    }
+
+    [Fact]
+    public void ConfiguredRiskCap_IsAppliedToSizing()
+    {
+        Assert.Equal(25m, RiskManager.AllowedDollarRisk(100_000m, 25m));
+        var units = RiskManager.CalculateUnits("EUR_USD", 100_000m, 9m, 1.085m, 1m, 25m);
+        Assert.True(RiskManager.RiskUsd("EUR_USD", units, 9m) <= 25m);
+    }
+
+    [Fact]
     public void LotSize_RoundsDown_SoRiskNeverExceedsHalfPercent()
     {
         // 3 pip stop: exact 1.6667 lots. Math.Round would give 1.67 ($50.10 risk); we must give 1.66.

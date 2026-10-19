@@ -82,7 +82,8 @@ internal sealed class Harness
 
     /// <param name="window">Trading hours; null = no restriction.</param>
     /// <param name="stateStore">When given, the guard loads/saves through it exactly as in production.</param>
-    public Harness(TradingWindow? window = null, IStateStore? stateStore = null)
+    public Harness(TradingWindow? window = null, IStateStore? stateStore = null,
+        decimal maxRiskPerTrade = RiskManager.DefaultMaxRiskPerTrade)
     {
         Activity = new ActivityLog(Clock);
         var gatekeeper = new GatekeeperAgent(Broker, Calendar, Clock);
@@ -93,7 +94,7 @@ internal sealed class Harness
 
         Agent = new ExecutionAgent(
             Broker, gatekeeper, Guard, Store, Activity, Notifier, Clock,
-            NullLogger<ExecutionAgent>.Instance, Persistence, window);
+            NullLogger<ExecutionAgent>.Instance, Persistence, window, maxRiskPerTrade);
     }
 
     public Task Propose() => Agent.ProposeAsync("EUR_USD", BuySignal, CancellationToken.None);
@@ -112,6 +113,30 @@ internal sealed class Harness
 
 public class ExecutionAgentProposeTests
 {
+    [Fact]
+    public async Task HighEquityProposal_UsesFiftyDollarDefaultCap()
+    {
+        var h = new Harness();
+        h.Broker.Nav = 100_000m;
+        var p = await h.ProposeOne();
+
+        Assert.True(p.RiskUsd <= 50m);
+        Assert.True(p.RiskUsd > 49m);
+    }
+
+    [Fact]
+    public async Task CustomRiskCap_IsAppliedAtProposalAndApproval()
+    {
+        var h = new Harness(maxRiskPerTrade: 25m);
+        h.Broker.Nav = 100_000m;
+        var p = await h.ProposeOne();
+        Assert.True(p.RiskUsd <= 25m);
+
+        var result = await h.Decide("approve", p.Id);
+        Assert.True(result.Executed);
+        Assert.True(h.Broker.Orders.Single().RiskUsd <= 25m);
+    }
+
     [Fact]
     public async Task Signal_BecomesOneQueuedProposal_AndOnePush()
     {

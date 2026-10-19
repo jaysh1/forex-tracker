@@ -12,7 +12,7 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
-    autoDeployTrigger: "off"   # redeploy by hand; a bot that trades should not restart on every commit
+    autoDeployTrigger: commit
     envVars:
       - key: OANDA_ENVIRONMENT
         value: practice
@@ -36,3 +36,5 @@ services:
         value: Mon-Fri
       - key: TRADING_TIMEZONE
         value: Australia/Melbourne
+      - key: MAX_RISK_PER_TRADE
+        value: "50"

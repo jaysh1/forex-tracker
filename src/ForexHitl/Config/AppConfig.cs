@@ -14,7 +14,8 @@ public sealed record AppConfig(
     string GuardStatePath,
     TradingWindow TradingHours,
     string? SupabaseUrl = null,
-    string? SupabaseSecretKey = null)
+    string? SupabaseSecretKey = null,
+    decimal MaxRiskPerTrade = RiskManager.DefaultMaxRiskPerTrade)
 {
     public const int MinPasswordLength = 12;
     public const int MinNtfyTopicLength = 16;
@@ -72,6 +73,7 @@ public sealed record AppConfig(
 
         var tradingHours = TradingWindow.Parse(get("TRADING_HOURS"), get("TRADING_DAYS"), get("TRADING_TIMEZONE"));
         var (supabaseUrl, supabaseKey) = ReadSupabase(get("SUPABASE_URL"), get("SUPABASE_SECRET_KEY"));
+        var maxRisk = ReadMaxRiskPerTrade(get("MAX_RISK_PER_TRADE"));
 
         return new AppConfig(
             Required("OANDA_API_TOKEN"),
@@ -86,7 +88,17 @@ public sealed record AppConfig(
             get("GUARD_STATE_PATH") is { Length: > 0 } p ? p : "data/guard-state.json",
             tradingHours,
             supabaseUrl,
-            supabaseKey);
+            supabaseKey,
+            maxRisk);
+    }
+
+    private static decimal ReadMaxRiskPerTrade(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return RiskManager.DefaultMaxRiskPerTrade;
+        if (!decimal.TryParse(raw, System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture, out var value) || value <= 0)
+            throw new InvalidOperationException("MAX_RISK_PER_TRADE must be a positive amount in the account's currency.");
+        return value;
     }
 
     private static (string? Url, string? Key) ReadSupabase(string? rawUrl, string? rawKey)

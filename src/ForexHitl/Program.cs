@@ -41,7 +41,18 @@ else
     builder.Services.AddHttpClient<IApprovalNotifier, NtfyNotifier>(c => c.Timeout = TimeSpan.FromSeconds(10));
 
 builder.Services.AddSingleton<GatekeeperAgent>();
-builder.Services.AddSingleton<ExecutionAgent>();
+builder.Services.AddSingleton(sp => new ExecutionAgent(
+    sp.GetRequiredService<IBrokerClient>(),
+    sp.GetRequiredService<GatekeeperAgent>(),
+    sp.GetRequiredService<DailyRiskGuard>(),
+    sp.GetRequiredService<PendingTradeStore>(),
+    sp.GetRequiredService<ActivityLog>(),
+    sp.GetRequiredService<IApprovalNotifier>(),
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<ILogger<ExecutionAgent>>(),
+    sp.GetRequiredService<GuardPersistence>(),
+    sp.GetRequiredService<TradingWindow>(),
+    config.MaxRiskPerTrade));
 // Order matters: hosted services start in registration order, so saved state is loaded before scanning starts.
 builder.Services.AddHostedService<StateSyncService>();
 builder.Services.AddHostedService<TechnicalAnalyticsAgent>();
