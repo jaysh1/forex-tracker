@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Forex approver</title>
+    <base href="/" />
+    <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+    <div id="app"><p class="muted center">Loading…</p></div>
+    <div id="blazor-error-ui">
+        Something went wrong. <a href="">Reload</a>
+    </div>
+    <script>
+        window.fmtTime = (iso) =>
+            new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    </script>
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+@implements IDisposable
+@inject ApiClient Api
+@inject IJSRuntime Js
+
+<header class="top">
+    <h1>Forex approver</h1>
+    @if (_state is not null)
+    {
+        <span class="badge @(_state.Status.Mode == "live" ? "live" : "practice")">@_state.Status.Mode.ToUpperInvariant()</span>
+    }
+    <button class="btn small" @onclick="SignOutAsync">Sign out</button>
+</header>
+
+@if (_error is not null)
+{
+    <p class="error" role="alert">@_error</p>
+}
+@if (_notice is not null)
+{
+    <p class="notice @(_noticeOk ? "ok" : "bad")" role="status">@_notice</p>
+}
+
+@if (_state is null)
+{
+    <p class="muted center">Connecting…</p>
+}
+else
+{
+    <section class="card">
+        <h2>Account</h2>
+        @if (!_state.Status.Ready)
+        {
+            <p class="muted">Waiting for the first update from OANDA. If this lasts more than a minute, see Activity below and check your OANDA token and account ID.</p>
+        }
+        else
+        {
+            <dl class="grid">
+                <dt>Equity</dt>
+                <dd>@Money(_state.Status.Equity)</dd>
+                <dt>Today</dt>
+                <dd class="@PnlClass(_state.Status.DayPnl)">@Signed(_state.Status.DayPnl)</dd>
+                <dt>Trading</dt>
+                <dd>@(_state.Status.CanTrade ? "Active" : "Paused")</dd>
+            </dl>
+            @if (!_state.Status.CanTrade && _state.Status.Reason is not null)
+            {
+                <p class="warn">@_state.Status.Reason</p>
+            }
+            @if (StaleFor(_state.Status) is { } stale)
+            {
+                <p class="warn">Scanner has not reported for @stale. It may be down or unable to reach OANDA - the figures above could be out of date. Check the server logs.</p>
+            }
+        }
+    </section>
+
+    <section>
+        <h2>Waiting for approval</h2>
+        @if (_state.Pending.Count == 0)
+        {
+            <p class="muted">No trades waiting.</p>
+        }
+        @foreach (var p in _state.Pending)
+        {
+            <article class="card trade @(p.Side == "Buy" ? "buy" : "sell")" @key="p.Id">
+                <h3>@p.Instrument <span class="side">@p.Side.ToUpperInvariant()</span></h3>
+                <dl class="grid">
+                    <dt>Size</dt>
+                    <dd>@p.Units.ToString("N0") units (@((p.Units / 100000m).ToString("0.00")) lot)</dd>
+                    <dt>Entry (approx.)</dt>
+                    <dd>@p.Entry.ToString("F5")</dd>
+                    <dt>Stop loss</dt>
+                    <dd>@p.StopLoss.ToString("F5") (@p.StopLossPips.ToString("0.0") pips)</dd>
+                    <dt>Take profit</dt>
+                    <dd>@p.TakeProfit.ToString("F5")</dd>
+                    <dt>Max loss</dt>
+                    <dd>$@p.RiskUsd.ToString("F2")</dd>
+                    <dt>Expires</dt>
+                    <dd>@Local(p.ExpiresUtc)</dd>
+                </dl>
+                <p class="why">@p.Rationale</p>
+                <div class="actions">
+                    <button class="btn reject" disabled="@_busy" @onclick="() => Reject(p.Id)">Reject</button>
+                    <button class="btn approve @(_confirming == p.Id ? "armed" : "")" disabled="@_busy" @onclick="() => Approve(p.Id)">
+                        @(_confirming == p.Id ? "Tap again to confirm" : "Approve")
+                    </button>
+                </div>
+            </article>
+        }
+    </section>
+
+    <section>
+        <h2>Activity</h2>
+        @if (_state.Activity.Count == 0)
+        {
+            <p class="muted">Nothing yet. The bot logs every proposal and every signal it skips here.</p>
+        }
+        <ul class="feed">
+            @foreach (var a in _state.Activity)
+            {
+                <li class="@a.Kind">
+                    <time>@Local(a.TimeUtc)</time>
+                    <span>@a.Text</span>
+                </li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    [Parameter] public EventCallback OnLoggedOut { get; set; }
+
+    private readonly CancellationTokenSource _cts = new();
+    private StateDto? _state;
+    private string? _error;
+    private string? _notice;
+    private string? _confirming;
+    private bool _noticeOk;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        _ = PollAsync();
+    }
+
+    private async Task PollAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                await RefreshAsync();
+                if (_cts.IsCancellationRequested) break;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            _state = await Api.GetStateAsync();
+            _error = null;
+        }
+        catch (SessionExpiredException)
+        {
+            _cts.Cancel();
+            await OnLoggedOut.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException)
+        {
+            // Includes request timeouts: without TaskCanceledException here one slow request on a bad
+            // mobile connection would end the polling loop silently.
+            _error = "Connection problem - retrying…";
+        }
+    }
+
+    private Task Approve(string id)
+    {
+        if (_confirming != id)
+        {
+            _confirming = id; // first tap arms the button, second tap sends
+            return Task.CompletedTask;
+        }
+        return DecideAsync(id, "approve");
+    }
+
+    private Task Reject(string id) => DecideAsync(id, "reject");
+
+    private async Task DecideAsync(string id, string action)
+    {
+        _busy = true;
+        _confirming = null;
+        _notice = null;
+        try
+        {
+            var result = await Api.DecideAsync(id, action);
+            _notice = result.Message;
+            _noticeOk = result.Executed || action == "reject";
+        }
+        catch (SessionExpiredException)
+        {
+            _cts.Cancel();
+            await OnLoggedOut.InvokeAsync();
+            return;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            _notice = "Request failed. Check your OANDA account before retrying.";
+            _noticeOk = false;
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await RefreshAsync();
+    }
+
+    private async Task SignOutAsync()
+    {
+        _cts.Cancel();
+        await Api.LogoutAsync();
+        await OnLoggedOut.InvokeAsync();
+    }
+
+    // Blazor WebAssembly reports UTC as the local zone, so format times with the browser's own clock.
+    private string Local(DateTime utc) =>
+        ((IJSInProcessRuntime)Js).Invoke<string>("fmtTime", DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToString("O"));
+
+    // The scanner refreshes status every ~20s; no update for 90s+ means it is stuck or cannot reach OANDA.
+    private static string? StaleFor(StatusDto s)
+    {
+        if (s.UpdatedUtc is not { } updated) return null;
+        var age = s.ServerTimeUtc - updated;
+        return age > TimeSpan.FromSeconds(90) ? $"{Math.Max(1, (int)age.TotalMinutes)} min" : null;
+    }
+
+    private static string Money(decimal? v) => v is { } m ? "$" + m.ToString("N2") : "-";
+
+    private static string Signed(decimal? v) =>
+        v is { } m ? (m >= 0 ? "+" : "-") + "$" + Math.Abs(m).ToString("N2") : "-";
+
+    private static string PnlClass(decimal? v) => v switch { > 0 => "pos", < 0 => "neg", _ => "" };
+
+    public void Dispose() => _cts.Cancel();
+}

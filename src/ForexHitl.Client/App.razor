@@ -1,0 +1,30 @@
+@inject ApiClient Api
+
+@if (!_ready)
+{
+    <p class="muted center">Loading…</p>
+}
+else if (!_loggedIn)
+{
+    <Login OnLoggedIn="HandleLoggedIn" />
+}
+else
+{
+    <Dashboard OnLoggedOut="HandleLoggedOut" />
+}
+
+@code {
+    private bool _ready;
+    private bool _loggedIn;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Api.InitAsync();
+        _loggedIn = Api.IsLoggedIn;
+        _ready = true;
+    }
+
+    private void HandleLoggedIn() => _loggedIn = true;
+
+    private void HandleLoggedOut() => _loggedIn = false;
+}

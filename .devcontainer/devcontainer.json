@@ -1,0 +1,14 @@
+{
+  "name": "Forex HITL (.NET 8)",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:1-8.0",
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": { "label": "Approval page", "onAutoForward": "notify" }
+  },
+  "containerEnv": {
+    "ASPNETCORE_URLS": "http://0.0.0.0:5000"
+  },
+  "customizations": {
+    "vscode": { "extensions": ["ms-dotnettools.csdevkit"] }
+  }
+}
