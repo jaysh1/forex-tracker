@@ -1,15 +1,23 @@
 using ForexHitl;
+using CFDEngine;
 using Microsoft.AspNetCore.StaticFiles;
 
 var config = AppConfig.FromEnvironment();
+var cfdSettings = CfdSettings.FromEnvironment(config.UseLive);
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(config);
+builder.Services.AddSingleton(cfdSettings);
+builder.Services.AddSingleton<CfdDailyRiskGuard>();
+builder.Services.AddSingleton(sp => new CfdRiskPersistence(
+    sp.GetRequiredService<CfdDailyRiskGuard>(),
+    Environment.GetEnvironmentVariable("CFD_GUARD_STATE_PATH") ?? config.GuardStatePath + ".cfd"));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(config.TradingHours);
 // The guard refuses to allow trading until its saved state has been loaded (see GuardPersistence).
-builder.Services.AddSingleton(new DailyRiskGuard(awaitingRestore: true));
+builder.Services.AddSingleton(new DailyRiskGuard(
+    awaitingRestore: true, maxRiskPerTrade: config.MaxRiskPerTrade));
 builder.Services.AddSingleton<GuardPersistence>();
 builder.Services.AddSingleton<PendingTradeStore>();
 builder.Services.AddSingleton<ActivityLog>();
@@ -33,6 +41,15 @@ builder.Services.AddHttpClient<IBrokerClient, OandaClient>(c =>
     c.DefaultRequestHeaders.Authorization = new("Bearer", config.OandaToken);
     c.Timeout = TimeSpan.FromSeconds(15);
 });
+builder.Services.AddHttpClient("cfd", c =>
+{
+    // CFD practice has its own client pinned to OANDA's practice endpoint. It cannot inherit live settings.
+    c.BaseAddress = new Uri("https://api-fxpractice.oanda.com/");
+    c.DefaultRequestHeaders.Authorization = new("Bearer", config.OandaToken);
+    c.Timeout = TimeSpan.FromSeconds(15);
+});
+builder.Services.AddTransient(sp => new CfdOandaClient(
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient("cfd"), config.OandaAccountId));
 builder.Services.AddHttpClient<INewsCalendar, HttpNewsCalendar>(c => c.Timeout = TimeSpan.FromSeconds(15));
 
 if (config.NtfyTopic is null)
@@ -41,6 +58,8 @@ else
     builder.Services.AddHttpClient<IApprovalNotifier, NtfyNotifier>(c => c.Timeout = TimeSpan.FromSeconds(10));
 
 builder.Services.AddSingleton<GatekeeperAgent>();
+builder.Services.AddSingleton<ICfdStrategy, CfdTrendPullbackStrategy>();
+builder.Services.AddSingleton<CfdPracticeAgent>();
 builder.Services.AddSingleton(sp => new ExecutionAgent(
     sp.GetRequiredService<IBrokerClient>(),
     sp.GetRequiredService<GatekeeperAgent>(),
@@ -56,6 +75,7 @@ builder.Services.AddSingleton(sp => new ExecutionAgent(
 // Order matters: hosted services start in registration order, so saved state is loaded before scanning starts.
 builder.Services.AddHostedService<StateSyncService>();
 builder.Services.AddHostedService<TechnicalAnalyticsAgent>();
+if (cfdSettings.Enabled) builder.Services.AddHostedService(sp => sp.GetRequiredService<CfdPracticeAgent>());
 
 var app = builder.Build();
 
@@ -112,6 +132,17 @@ secured.MapPost("/logout", (HttpRequest request, SessionAuth auth) =>
 {
     auth.Logout(request.Headers.Authorization.ToString()[7..]);
     return Results.NoContent();
+});
+
+secured.MapGet("/cfd/state", (CfdPracticeAgent cfd) => Results.Ok(cfd.Snapshot()));
+secured.MapPost("/cfd/proposals/{id}/{action}", async (string id, string action, CfdPracticeAgent cfd, ILogger<Program> log) =>
+{
+    try { return Results.Ok(await cfd.DecideAsync(action, id, CancellationToken.None)); }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed handling CFD practice decision {Action} {Id}", action, id);
+        return Results.Ok(new { Executed = false, Message = "CFD order failed - check your OANDA practice account before retrying." });
+    }
 });
 
 secured.MapGet("/state", (

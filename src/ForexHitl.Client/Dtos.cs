@@ -18,3 +18,11 @@ public sealed record StatusDto(
 public sealed record ActivityDto(DateTime TimeUtc, string Kind, string Text);
 
 public sealed record StateDto(StatusDto Status, List<PendingDto> Pending, List<ActivityDto> Activity);
+
+public sealed record CfdPendingDto(string Id, string Instrument, string Side, long Units,
+    decimal Entry, decimal StopLoss, decimal TakeProfit, decimal StopDistancePoints, decimal MaxLoss,
+    string Currency, DateTime CreatedUtc, DateTime ExpiresUtc, string Rationale, int PricePrecision);
+
+public sealed record CfdStatusDto(bool Enabled, string Mode, List<string> Instruments,
+    DateTime? UpdatedUtc, decimal? Equity, string? Currency, decimal? DayPnl, bool CanTrade,
+    string? Reason, string TradingHours, List<CfdPendingDto> Pending);

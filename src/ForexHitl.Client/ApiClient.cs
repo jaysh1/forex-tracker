@@ -58,6 +58,20 @@ public sealed class ApiClient
                ?? throw new HttpRequestException("Empty response from server.");
     }
 
+    public async Task<CfdStatusDto> GetCfdStateAsync()
+    {
+        using var resp = await SendAsync(HttpMethod.Get, "api/cfd/state");
+        return await resp.Content.ReadFromJsonAsync<CfdStatusDto>()
+               ?? throw new HttpRequestException("Empty CFD response from server.");
+    }
+
+    public async Task<DecisionResult> DecideCfdAsync(string proposalId, string action)
+    {
+        using var resp = await SendAsync(HttpMethod.Post, $"api/cfd/proposals/{Uri.EscapeDataString(proposalId)}/{action}");
+        return await resp.Content.ReadFromJsonAsync<DecisionResult>()
+               ?? throw new HttpRequestException("Empty CFD decision response from server.");
+    }
+
     public async Task<DecisionResult> DecideAsync(string proposalId, string action)
     {
         using var resp = await SendAsync(HttpMethod.Post, $"api/proposals/{Uri.EscapeDataString(proposalId)}/{action}");

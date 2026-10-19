@@ -105,6 +105,50 @@ public class DailyRiskGuardTests
     private static readonly DateTime T0 = new(2026, 10, 14, 10, 0, 0, DateTimeKind.Utc);
 
     [Fact]
+    public void LargeBalance_DailyLossLimitIs150WithDefaultRiskCap()
+    {
+        var g = new DailyRiskGuard();
+        Assert.True(g.Evaluate(100_000m, T0).CanTrade);
+        Assert.True(g.Evaluate(99_851m, T0.AddHours(1)).CanTrade);  // -$149
+        Assert.False(g.Evaluate(99_850m, T0.AddHours(2)).CanTrade); // -$150, not -$1,500
+    }
+
+    [Fact]
+    public void LargeBalance_DailyProfitStopIs100WithDefaultRiskCap()
+    {
+        var g = new DailyRiskGuard();
+        Assert.True(g.Evaluate(100_000m, T0).CanTrade);
+        Assert.True(g.Evaluate(100_099m, T0.AddHours(1)).CanTrade);
+        Assert.False(g.Evaluate(100_100m, T0.AddHours(2)).CanTrade);
+    }
+
+    [Fact]
+    public void SmallBalance_DailyLimitsRemainPercentagesOfStartEquity()
+    {
+        var g = new DailyRiskGuard();
+        Assert.True(g.Evaluate(5_000m, T0).CanTrade);
+        Assert.True(g.Evaluate(4_926m, T0.AddHours(1)).CanTrade);  // -$74, below 1.5% ($75)
+        Assert.False(g.Evaluate(4_925m, T0.AddHours(2)).CanTrade); // -$75
+    }
+
+    [Fact]
+    public void CustomRiskCap_ScalesDailyLimits()
+    {
+        var g = new DailyRiskGuard(maxRiskPerTrade: 100m); // implies $20,000 risk capital
+        Assert.True(g.Evaluate(100_000m, T0).CanTrade);
+        Assert.True(g.Evaluate(99_701m, T0.AddHours(1)).CanTrade);  // -$299
+        Assert.False(g.Evaluate(99_700m, T0.AddHours(2)).CanTrade); // -$300
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void NonPositiveRiskCap_IsRejected(decimal maxRiskPerTrade)
+    {
+        Assert.Throws<ArgumentException>(() => new DailyRiskGuard(maxRiskPerTrade: maxRiskPerTrade));
+    }
+
+    [Fact]
     public void DrawdownCap_LocksFor24Hours()
     {
         var g = new DailyRiskGuard();

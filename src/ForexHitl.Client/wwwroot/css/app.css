@@ -28,6 +28,13 @@ h3 { font-size: 1.1rem; margin: 0 0 8px; }
 .badge.practice { background: var(--ok-bg); color: var(--buy); }
 .badge.live { background: var(--sell); color: #fff; }
 
+.market-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0 18px; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.market-tab { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
+.market-tab.selected { background: var(--accent); color: #fff; }
+.market-tab:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.cfd-note { font-size: .85rem; }
+.cfd-note a { color: var(--accent); }
+
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
 .trade.buy { border-left: 5px solid var(--buy); }
 .trade.sell { border-left: 5px solid var(--sell); }

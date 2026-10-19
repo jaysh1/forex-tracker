@@ -104,7 +104,7 @@ public class AudAccountSizingTests
         var result = await h.Decide("approve", p.Id);
 
         Assert.False(result.Executed);
-        Assert.Contains("0.5% risk", result.Message);
+        Assert.Contains("risk limit", result.Message);
         Assert.Equal(0, h.Broker.Orders.Count);
     }
 

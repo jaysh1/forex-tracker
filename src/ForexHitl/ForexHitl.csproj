@@ -1,11 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>ForexHitl</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <ProjectReference Include="../ForexEngine/ForexEngine.csproj" />
+    <ProjectReference Include="../CFDEngine/CFDEngine.csproj" />
+    <ProjectReference Include="../StockEngine/StockEngine.csproj" />
+  </ItemGroup>
 
 </Project>

@@ -20,8 +20,8 @@ One container serves both the API and the web page, so there is nothing else to 
 | Rule | Value |
 |---|---|
 | Risk per trade | Lower of 0.5% of current NAV and `$50` in account currency; lot size rounded **down** |
-| Daily drawdown cap | 1.5% of start-of-day NAV, then 24h lockout |
-| Daily profit cap | 1.0%, then no trading until the next session (22:00 UTC rollover) |
+| Daily drawdown cap | 1.5% of the lower of start-of-day NAV and the capital implied by the per-trade cap, then 24h lockout |
+| Daily profit cap | 1.0% of that same base, then no trading until the next session (22:00 UTC rollover) |
 | Reward:risk | exactly 1:2 (TP = 2 x SL distance) |
 | Spread cap | 0.5 pips |
 | News blackout | +/-30 min around High-impact events for either currency in the pair |
@@ -34,8 +34,8 @@ the order is re-sized against current equity and rate: never larger than you app
 to shrink by more than 5%. The page shows plain "$" for these amounts whatever the currency.
 
 The default `$50` per-trade cap keeps a `$100,000` balance from increasing planned risk to `$500`. Set
-`MAX_RISK_PER_TRADE` to a different positive amount in the OANDA account's currency if needed; the 0.5% NAV limit
-still applies whenever it is lower.
+`MAX_RISK_PER_TRADE` to a different positive amount in the OANDA account's currency if needed. The daily loss and
+profit limits scale with the lower of start-of-day NAV and the capital implied by that cap (cap divided by 0.5%).
 
 Daily P&L is measured on NAV, so unrealised losses count. The day's starting equity and any lockout are saved
 (to Supabase, or to a local file - see below) so a restart cannot reset the baseline or clear a lockout.
