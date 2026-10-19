@@ -66,6 +66,12 @@ Open the service URL and sign in with `APPROVER_PASSWORD`. The Account card fill
 - Yellow "Scanner has not reported for N min": the scanner has stopped updating. Check the server logs.
 - The Activity list also records every signal the bot skipped and why (spread, news, lockout, sizing).
 
+## Health check
+
+`GET` or `HEAD /health` returns `200 OK` with the text `OK`. No login, no secrets. Point a cron job, uptime monitor or
+Render's health check at it. It only proves the web server is up, not that the scanner is working; for that, look at
+the Account card on the page (a yellow banner appears if the scanner stops reporting).
+
 ## Develop in GitHub Codespaces
 
 ```bash

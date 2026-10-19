@@ -57,7 +57,8 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// Public, no login, no secrets: for uptime monitors / cron pings and Render's health check. GET and HEAD.
+app.MapMethods("/health", new[] { "GET", "HEAD" }, () => Results.Text("OK"));
 
 // --- Approval API ---------------------------------------------------------------------------------------
 app.MapPost("/api/login", async (LoginRequest req, SessionAuth auth) =>
