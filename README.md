@@ -20,8 +20,8 @@ One container serves both the API and the web page, so there is nothing else to 
 | Rule | Value |
 |---|---|
 | Risk per trade | Lower of 0.5% of current NAV and `$50` in account currency; lot size rounded **down** |
-| Daily drawdown cap | 1.5% of start-of-day NAV, then 24h lockout |
-| Daily profit cap | 1.0%, then no trading until the next session (22:00 UTC rollover) |
+| Daily drawdown cap | 1.5% of start-of-day NAV, then 24h lockout. Sized on at most the capital the per-trade cap implies (`$150` with the default `$50` cap), so a big balance does not widen it |
+| Daily profit cap | 1.0% (`$100` with the default cap, same rule), then no trading until the next session (22:00 UTC rollover) |
 | Reward:risk | exactly 1:2 (TP = 2 x SL distance) |
 | Spread cap | 0.5 pips |
 | News blackout | +/-30 min around High-impact events for either currency in the pair |

@@ -87,7 +87,7 @@ internal sealed class Harness
     {
         Activity = new ActivityLog(Clock);
         var gatekeeper = new GatekeeperAgent(Broker, Calendar, Clock);
-        Guard = new DailyRiskGuard(awaitingRestore: stateStore is not null);
+        Guard = new DailyRiskGuard(awaitingRestore: stateStore is not null, maxRiskPerTrade);
         if (stateStore is not null)
             Persistence = new GuardPersistence(
                 Guard, stateStore, Activity, Clock, NullLogger<GuardPersistence>.Instance);
