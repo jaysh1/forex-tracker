@@ -9,7 +9,7 @@ builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(config.TradingHours);
 // The guard refuses to allow trading until its saved state has been loaded (see GuardPersistence).
-builder.Services.AddSingleton(new DailyRiskGuard(awaitingRestore: true));
+builder.Services.AddSingleton(new DailyRiskGuard(awaitingRestore: true, config.MaxRiskPerTrade));
 builder.Services.AddSingleton<GuardPersistence>();
 builder.Services.AddSingleton<PendingTradeStore>();
 builder.Services.AddSingleton<ActivityLog>();

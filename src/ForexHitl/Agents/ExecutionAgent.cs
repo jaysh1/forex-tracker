@@ -175,7 +175,7 @@ public sealed class ExecutionAgent
             var maxUnits = RiskManager.CalculateUnits(p.Instrument, acct.Nav, p.StopLossPips, live, fx, _maxRiskPerTrade);
             var units = Math.Min(p.Units, maxUnits);
             if (units < 1 || units < p.Units * 0.95m)
-                return Refuse(p, "Equity or the exchange rate has moved since the proposal, so the approved size is no longer within 0.5% risk");
+                return Refuse(p, "Equity or the exchange rate has moved since the proposal, so the approved size is no longer within the risk limit");
 
             var order = ProposalBuilder.Reanchor(p, live) with
             {

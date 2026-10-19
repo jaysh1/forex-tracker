@@ -35,7 +35,17 @@ public sealed class DailyRiskGuard
     private bool _ready;
     private bool _dirty;
 
-    public DailyRiskGuard(bool awaitingRestore = false) => _ready = !awaitingRestore;
+    private readonly decimal _riskCapital;
+
+    /// <param name="maxRiskPerTrade">The per-trade cap in account currency. The daily limits are sized on the same
+    /// capital that cap implies (cap / 0.5%), so a $50 cap means a $150 loss limit and a $100 profit stop even on a
+    /// $100,000 balance, instead of 1.5% and 1.0% of the whole balance.</param>
+    public DailyRiskGuard(bool awaitingRestore = false, decimal maxRiskPerTrade = RiskManager.DefaultMaxRiskPerTrade)
+    {
+        if (maxRiskPerTrade <= 0) throw new ArgumentException("Maximum risk must be greater than zero.", nameof(maxRiskPerTrade));
+        _ready = !awaitingRestore;
+        _riskCapital = maxRiskPerTrade / (RiskLimits.RiskPerTradePct / 100m);
+    }
 
     public bool Ready
     {
@@ -104,8 +114,9 @@ public sealed class DailyRiskGuard
 
             if (_state.LockedUntilUtc is null)
             {
-                var drawdownLimit = _state.StartEquity * RiskLimits.DailyDrawdownPct / 100m;
-                var profitTarget = _state.StartEquity * RiskLimits.DailyProfitTargetPct / 100m;
+                var limitBase = Math.Min(_state.StartEquity, _riskCapital);
+                var drawdownLimit = limitBase * RiskLimits.DailyDrawdownPct / 100m;
+                var profitTarget = limitBase * RiskLimits.DailyProfitTargetPct / 100m;
 
                 if (pnl <= -drawdownLimit)
                 {
