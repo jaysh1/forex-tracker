@@ -22,12 +22,15 @@ public sealed class ExecutionAgent
     private readonly IApprovalNotifier _notifier;
     private readonly TimeProvider _time;
     private readonly ILogger<ExecutionAgent> _log;
+    private readonly GuardPersistence? _persistence;
+    private readonly TradingWindow _window;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private volatile StatusSnapshot? _lastStatus;
 
     public ExecutionAgent(
         IBrokerClient broker, GatekeeperAgent gatekeeper, DailyRiskGuard guard, PendingTradeStore store,
-        ActivityLog activity, IApprovalNotifier notifier, TimeProvider time, ILogger<ExecutionAgent> log)
+        ActivityLog activity, IApprovalNotifier notifier, TimeProvider time, ILogger<ExecutionAgent> log,
+        GuardPersistence? persistence = null, TradingWindow? tradingWindow = null)
     {
         _broker = broker;
         _gatekeeper = gatekeeper;
@@ -37,9 +40,25 @@ public sealed class ExecutionAgent
         _notifier = notifier;
         _time = time;
         _log = log;
+        _persistence = persistence;
+        _window = tradingWindow ?? TradingWindow.Always;
     }
 
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
+
+    private bool InTradingHours => _window.IsOpen(Now);
+
+    /// <summary>
+    /// Every guard check goes through here: make sure the saved state has been loaded (trading stays paused
+    /// until it is), evaluate, then save the state if it changed.
+    /// </summary>
+    private async Task<GuardStatus> EvaluateGuardAsync(decimal equity, DateTime now, CancellationToken ct)
+    {
+        if (_persistence is not null) await _persistence.EnsureLoadedAsync(ct);
+        var status = _guard.Evaluate(equity, now);
+        if (_persistence is not null) await _persistence.FlushAsync(ct);
+        return status;
+    }
 
     /// <summary>Latest account/guard status for the UI; null until the scanner has completed one tick.</summary>
     public StatusSnapshot? LastStatus => _lastStatus;
@@ -48,7 +67,7 @@ public sealed class ExecutionAgent
     public async Task<GuardStatus> RefreshGuardAsync(CancellationToken ct)
     {
         var acct = await _broker.GetAccountAsync(ct);
-        var status = _guard.Evaluate(acct.Nav, Now);
+        var status = await EvaluateGuardAsync(acct.Nav, Now, ct);
         _lastStatus = new StatusSnapshot(Now, acct.Nav, status.DayPnl, status.CanTrade, status.Reason);
 
         if (status.NewlyLocked)
@@ -65,10 +84,11 @@ public sealed class ExecutionAgent
         await _gate.WaitAsync(ct);
         try
         {
+            if (!InTradingHours) return;
             if (_store.HasPending(instrument)) return;
 
             var acct = await _broker.GetAccountAsync(ct);
-            if (!_guard.Evaluate(acct.Nav, Now).CanTrade) return;
+            if (!(await EvaluateGuardAsync(acct.Nav, Now, ct)).CanTrade) return;
             if (await _broker.HasOpenPositionAsync(instrument, ct)) return;
 
             var gate = await _gatekeeper.CheckAsync(instrument, ct);
@@ -129,9 +149,10 @@ public sealed class ExecutionAgent
 
             var now = Now;
             if (now - p.CreatedUtc > ProposalTtl) return Refuse(p, "Proposal expired");
+            if (!_window.IsOpen(now)) return Refuse(p, $"Outside trading hours ({_window.Describe()})");
 
             var acct = await _broker.GetAccountAsync(ct);
-            var status = _guard.Evaluate(acct.Nav, now);
+            var status = await EvaluateGuardAsync(acct.Nav, now, ct);
             if (!status.CanTrade) return Refuse(p, $"Trading locked: {status.Reason}");
 
             var gate = await _gatekeeper.CheckAsync(p.Instrument, ct);

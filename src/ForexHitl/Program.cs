@@ -7,10 +7,20 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton(new DailyRiskGuard(config.GuardStatePath));
+builder.Services.AddSingleton(config.TradingHours);
+// The guard refuses to allow trading until its saved state has been loaded (see GuardPersistence).
+builder.Services.AddSingleton(new DailyRiskGuard(awaitingRestore: true));
+builder.Services.AddSingleton<GuardPersistence>();
 builder.Services.AddSingleton<PendingTradeStore>();
 builder.Services.AddSingleton<ActivityLog>();
 builder.Services.AddSingleton<SessionAuth>();
+
+// State store: Supabase when configured, otherwise a local file (only durable on a persistent disk).
+if (config.SupabaseUrl is not null)
+    builder.Services.AddHttpClient<IStateStore, SupabaseStateStore>(c =>
+        SupabaseStateStore.Configure(c, config.SupabaseUrl, config.SupabaseSecretKey!));
+else
+    builder.Services.AddSingleton<IStateStore>(new FileStateStore(config.GuardStatePath));
 
 builder.Services.AddHttpClient<IBrokerClient, OandaClient>(c =>
 {
@@ -27,6 +37,8 @@ else
 
 builder.Services.AddSingleton<GatekeeperAgent>();
 builder.Services.AddSingleton<ExecutionAgent>();
+// Order matters: hosted services start in registration order, so saved state is loaded before scanning starts.
+builder.Services.AddHostedService<StateSyncService>();
 builder.Services.AddHostedService<TechnicalAnalyticsAgent>();
 
 var app = builder.Build();
@@ -87,12 +99,14 @@ secured.MapPost("/logout", (HttpRequest request, SessionAuth auth) =>
 });
 
 secured.MapGet("/state", (
-    ExecutionAgent execution, PendingTradeStore store, ActivityLog activity, AppConfig cfg, TimeProvider time) =>
+    ExecutionAgent execution, PendingTradeStore store, ActivityLog activity, AppConfig cfg, TradingWindow hours,
+    TimeProvider time) =>
 {
     var s = execution.LastStatus;
+    var now = time.GetUtcNow().UtcDateTime;
     var status = new StatusDto(
         cfg.UseLive ? "live" : "practice", s is not null, s?.UpdatedUtc, s?.Equity, s?.DayPnl,
-        s?.CanTrade ?? true, s?.Reason, time.GetUtcNow().UtcDateTime);
+        s?.CanTrade ?? true, s?.Reason, now, hours.IsOpen(now), hours.Describe());
 
     var pending = store.Snapshot().Select(p => new PendingDto(
         p.Id, p.Instrument, p.Side.ToString(), p.Units, p.EntryPrice, p.StopLoss, p.TakeProfit,

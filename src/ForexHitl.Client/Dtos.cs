@@ -13,7 +13,7 @@ public sealed record PendingDto(
 
 public sealed record StatusDto(
     string Mode, bool Ready, DateTime? UpdatedUtc, decimal? Equity, decimal? DayPnl,
-    bool CanTrade, string? Reason, DateTime ServerTimeUtc);
+    bool CanTrade, string? Reason, DateTime ServerTimeUtc, bool InTradingHours, string TradingHours);
 
 public sealed record ActivityDto(DateTime TimeUtc, string Kind, string Text);
 

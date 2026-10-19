@@ -11,7 +11,10 @@ public sealed record AppConfig(
     string? PublicBaseUrl,
     IReadOnlyList<string> Instruments,
     IReadOnlyList<string> CalendarUrls,
-    string GuardStatePath)
+    string GuardStatePath,
+    TradingWindow TradingHours,
+    string? SupabaseUrl = null,
+    string? SupabaseSecretKey = null)
 {
     public const int MinPasswordLength = 12;
     public const int MinNtfyTopicLength = 16;
@@ -67,6 +70,9 @@ public sealed record AppConfig(
         var publicUrl = get("PUBLIC_BASE_URL")?.Trim().TrimEnd('/');
         var ntfyServer = (get("NTFY_SERVER") is { Length: > 0 } s ? s.Trim() : "https://ntfy.sh").TrimEnd('/');
 
+        var tradingHours = TradingWindow.Parse(get("TRADING_HOURS"), get("TRADING_DAYS"), get("TRADING_TIMEZONE"));
+        var (supabaseUrl, supabaseKey) = ReadSupabase(get("SUPABASE_URL"), get("SUPABASE_SECRET_KEY"));
+
         return new AppConfig(
             Required("OANDA_API_TOKEN"),
             Required("OANDA_ACCOUNT_ID"),
@@ -77,6 +83,53 @@ public sealed record AppConfig(
             string.IsNullOrEmpty(publicUrl) ? null : publicUrl,
             instruments,
             calendarUrls,
-            get("GUARD_STATE_PATH") is { Length: > 0 } p ? p : "data/guard-state.json");
+            get("GUARD_STATE_PATH") is { Length: > 0 } p ? p : "data/guard-state.json",
+            tradingHours,
+            supabaseUrl,
+            supabaseKey);
+    }
+
+    private static (string? Url, string? Key) ReadSupabase(string? rawUrl, string? rawKey)
+    {
+        var url = rawUrl?.Trim();
+        var key = rawKey?.Trim();
+        if (string.IsNullOrEmpty(url) && string.IsNullOrEmpty(key)) return (null, null);
+
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(key))
+            throw new InvalidOperationException("SUPABASE_URL and SUPABASE_SECRET_KEY must both be set, or both left empty.");
+
+        url = url.TrimEnd('/');
+        if (url.EndsWith("/rest/v1", StringComparison.OrdinalIgnoreCase)) url = url[..^"/rest/v1".Length];
+        // https only, because the secret key travels in the request. The one exception is a Supabase running on
+        // this same machine (the Supabase CLI's local stack, http://127.0.0.1:54321), for development.
+        var valid = Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.AbsolutePath == "/" &&
+                    (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback));
+        if (!valid)
+            throw new InvalidOperationException(
+                "SUPABASE_URL must be your project URL over https, like https://abcdefgh.supabase.co");
+
+        if (key.StartsWith("sb_publishable_", StringComparison.Ordinal) || JwtRole(key) == "anon")
+            throw new InvalidOperationException(
+                "SUPABASE_SECRET_KEY is a publishable/anon key. Use the project's secret key (sb_secret_...) instead.");
+
+        return (url, key);
+    }
+
+    /// <summary>The "role" claim of a legacy Supabase JWT key, or null if the key is not a readable JWT.</summary>
+    private static string? JwtRole(string key)
+    {
+        var parts = key.Split('.');
+        if (parts.Length != 3) return null;
+        try
+        {
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+            using var doc = System.Text.Json.JsonDocument.Parse(Convert.FromBase64String(payload));
+            return doc.RootElement.TryGetProperty("role", out var r) ? r.GetString() : null;
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 }

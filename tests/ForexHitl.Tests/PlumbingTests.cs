@@ -7,6 +7,7 @@ internal sealed class FakeClock : TimeProvider
     private DateTimeOffset _now = new(2026, 10, 14, 10, 0, 0, TimeSpan.Zero);
     public override DateTimeOffset GetUtcNow() => _now;
     public void Advance(TimeSpan by) => _now += by;
+    public void Set(DateTimeOffset to) => _now = to;
 }
 
 public class SessionAuthTests

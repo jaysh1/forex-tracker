@@ -13,18 +13,23 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
     private readonly AppConfig _config;
     private readonly ILogger<TechnicalAnalyticsAgent> _log;
     private readonly ActivityLog _activity;
+    private readonly TradingWindow _window;
+    private readonly TimeProvider _time;
     private readonly Dictionary<string, DateTime> _lastCandle = new();
     private string? _lastError;
     private DateTime _lastErrorAtUtc = DateTime.MinValue;
+    private bool? _wasInHours;
 
     public TechnicalAnalyticsAgent(
         IBrokerClient broker, ExecutionAgent execution, AppConfig config, ActivityLog activity,
-        ILogger<TechnicalAnalyticsAgent> log)
+        TradingWindow window, TimeProvider time, ILogger<TechnicalAnalyticsAgent> log)
     {
         _broker = broker;
         _execution = execution;
         _config = config;
         _activity = activity;
+        _window = window;
+        _time = time;
         _log = log;
     }
 
@@ -80,12 +85,32 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
         }
     }
 
-    private async Task TickAsync(CancellationToken ct)
+    /// <summary>
+    /// Records when trading hours start and end. When they start, forget the previously seen candles so the
+    /// first tick only records the latest candle and signals are judged on fresh data, not on what happened
+    /// before the window opened.
+    /// </summary>
+    private void NoteTradingHours(bool inHours)
+    {
+        if (_wasInHours == inHours) return;
+        _wasInHours = inHours;
+
+        if (inHours) _lastCandle.Clear();
+        _activity.Add("hours", inHours
+            ? $"Trading hours started ({_window.Describe()}) - scanning for signals."
+            : $"Outside trading hours ({_window.Describe()}) - not scanning for signals. Open trades keep their stop loss and take profit.");
+    }
+
+    public async Task TickAsync(CancellationToken ct)
     {
         _execution.ExpireStale();
 
+        // Always refresh the account figures and risk caps, so the page stays current outside trading hours.
         var status = await _execution.RefreshGuardAsync(ct);
-        if (!status.CanTrade) return;
+
+        var inHours = _window.IsOpen(_time.GetUtcNow().UtcDateTime);
+        NoteTradingHours(inHours);
+        if (!inHours || !status.CanTrade) return;
 
         foreach (var instrument in _config.Instruments)
         {

@@ -25,15 +25,58 @@ One container serves both the API and the web page, so there is nothing else to 
 | Reward:risk | exactly 1:2 (TP = 2 x SL distance) |
 | Spread cap | 0.5 pips |
 | News blackout | +/-30 min around High-impact events for either currency in the pair |
-| Extra rails (additions) | max 10x leverage, one position per pair, 5 min proposal expiry, two-tap approve, fail-closed if calendar is down |
+| Trading hours | Mon-Fri 09:00-17:00 Melbourne time by default (see below); no new proposals and no approvals outside them |
+| Extra rails (additions) | max 10x leverage, one position per pair, 5 min proposal expiry, two-tap approve, fail-closed if calendar is down or saved risk state cannot be loaded |
 
 All money figures (equity, risk, P&L) are in your **account's own currency**, read from OANDA. Pip values are USD,
 so on a non-USD account (e.g. AUD) risk is converted at the live rate, rounded in the cautious direction. At approval
 the order is re-sized against current equity and rate: never larger than you approved, and refused if it would have
 to shrink by more than 5%. The page shows plain "$" for these amounts whatever the currency.
 
-Daily P&L is measured on NAV, so unrealised losses count. Guard state persists to `GUARD_STATE_PATH`
-so a restart cannot reset the baseline or clear a lockout - **mount a persistent disk there in production**.
+Daily P&L is measured on NAV, so unrealised losses count. The day's starting equity and any lockout are saved
+(to Supabase, or to a local file - see below) so a restart cannot reset the baseline or clear a lockout.
+
+## Trading hours
+
+By default the bot only looks for signals, proposes trades and accepts approvals **Monday to Friday, 09:00 to
+17:00 Melbourne time** (daylight saving is handled automatically). Outside those hours the page still shows your
+equity and risk status, and Activity logs "Outside trading hours". A trade you opened earlier keeps its stop loss and
+take profit at OANDA, which work around the clock. Reject always works. Change the window with
+`TRADING_HOURS`, `TRADING_DAYS` and `TRADING_TIMEZONE`, or set `TRADING_HOURS=always`.
+
+## Saving state to Supabase
+
+Two things are saved so they survive restarts and redeploys: the **risk guard state** (the day's starting equity and
+any drawdown/profit lockout) and the **recent activity feed**. Pending proposals (they expire in 5 minutes) and
+sign-in sessions (a restart signs you out) deliberately stay in memory.
+
+1. Create a project at supabase.com. In the dashboard open **SQL Editor** and run `supabase/schema.sql` (also below).
+2. In **Project Settings > API Keys** copy the **secret** key (`sb_secret_...`) and your project URL
+   (`https://<ref>.supabase.co`). Never use the publishable/anon key, and never put the secret key in the repo or the browser.
+3. Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` as environment variables (Render: Environment tab), then restart.
+
+```sql
+create table if not exists public.bot_state (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.bot_state enable row level security;   -- no policies: only the secret key can use the table
+revoke all on public.bot_state from anon, authenticated;
+grant all on public.bot_state to service_role;
+```
+
+How it behaves:
+
+- **Fails safe on load.** If the saved risk state cannot be read (wrong key, Supabase down, corrupt row), trading stays
+  **paused** and Activity says why, retrying every 20 seconds. Carrying on with a fresh baseline could silently
+  erase a lockout, so it does not.
+- **Keeps going on save failure.** If a save fails, trading continues on the in-memory state and the save is retried
+  on every tick; Activity reports it (a restart during that time could lose the newest change).
+- The risk state is saved the moment it changes; the activity feed is saved every 10 seconds, and both once more on shutdown.
+- Without `SUPABASE_URL`, state goes to a local file (`GUARD_STATE_PATH`), which only survives restarts on a
+  persistent disk. With Supabase you do **not** need a disk, so a free Render instance no longer loses the daily-loss state.
+- For local development against the Supabase CLI's stack, `http://127.0.0.1:54321` is accepted; every other URL must be https.
 
 ## Environment variables
 
@@ -47,7 +90,11 @@ so a restart cannot reset the baseline or clear a lockout - **mount a persistent
 | `PUBLIC_BASE_URL` | Optional. Public URL of the app; a tap on the ntfy notification opens it |
 | `INSTRUMENTS` | Optional, default `EUR_USD,GBP_USD` |
 | `CALENDAR_FEED_URLS` | Optional, comma-separated JSON feeds (default: Faireconomy weekly export) |
-| `GUARD_STATE_PATH` | Optional, default `data/guard-state.json` (the Docker image sets `/app/data/guard-state.json`) |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Optional, set both or neither. Project URL and **secret** key; saves risk state and activity to Supabase |
+| `TRADING_HOURS` | Optional, default `09:00-17:00` (`HH:mm-HH:mm`, cannot cross midnight), or `always` |
+| `TRADING_DAYS` | Optional, default `Mon-Fri` (also `Mon,Wed,Fri` or `Fri-Mon`) |
+| `TRADING_TIMEZONE` | Optional, default `Australia/Melbourne` (IANA name) |
+| `GUARD_STATE_PATH` | Optional, used only without Supabase. Default `data/guard-state.json` (the Docker image sets `/app/data/guard-state.json`) |
 
 Never commit secrets. Use Codespaces secrets while developing and Render's environment settings in production.
 

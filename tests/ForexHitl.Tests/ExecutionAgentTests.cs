@@ -15,6 +15,7 @@ internal sealed class FakeBroker : IBrokerClient
     public bool OpenPosition;
     public bool ThrowOnOrder;
     public readonly List<TradeProposal> Orders = new();
+    public int CandleCalls;
 
     public Task<AccountSummary> GetAccountAsync(CancellationToken ct) =>
         Task.FromResult(new AccountSummary(Nav, Nav, Currency));
@@ -24,8 +25,11 @@ internal sealed class FakeBroker : IBrokerClient
             ? new Quote(instrument, AudUsdBid, AudUsdAsk, DateTime.UtcNow, Tradeable)
             : new Quote(instrument, Bid, Ask, DateTime.UtcNow, Tradeable));
 
-    public Task<IReadOnlyList<Candle>> GetCandlesAsync(string instrument, string granularity, int count, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<Candle>>(new List<Candle>());
+    public Task<IReadOnlyList<Candle>> GetCandlesAsync(string instrument, string granularity, int count, CancellationToken ct)
+    {
+        CandleCalls++;
+        return Task.FromResult<IReadOnlyList<Candle>>(new List<Candle>());
+    }
 
     public Task<bool> HasOpenPositionAsync(string instrument, CancellationToken ct) =>
         Task.FromResult(OpenPosition);
@@ -66,17 +70,26 @@ internal sealed class Harness
     public readonly ActivityLog Activity;
     public readonly RecordingNotifier Notifier = new();
     public readonly ExecutionAgent Agent;
+    public readonly DailyRiskGuard Guard;
+    public readonly GuardPersistence? Persistence;
 
     // 1.5 x 6 pip ATR = a 9 pip stop.
     public static readonly Signal BuySignal = new(Side.Buy, 0.0006m, "test signal");
 
-    public Harness()
+    /// <param name="window">Trading hours; null = no restriction.</param>
+    /// <param name="stateStore">When given, the guard loads/saves through it exactly as in production.</param>
+    public Harness(TradingWindow? window = null, IStateStore? stateStore = null)
     {
         Activity = new ActivityLog(Clock);
         var gatekeeper = new GatekeeperAgent(Broker, Calendar, Clock);
+        Guard = new DailyRiskGuard(awaitingRestore: stateStore is not null);
+        if (stateStore is not null)
+            Persistence = new GuardPersistence(
+                Guard, stateStore, Activity, Clock, NullLogger<GuardPersistence>.Instance);
+
         Agent = new ExecutionAgent(
-            Broker, gatekeeper, new DailyRiskGuard(), Store, Activity, Notifier, Clock,
-            NullLogger<ExecutionAgent>.Instance);
+            Broker, gatekeeper, Guard, Store, Activity, Notifier, Clock,
+            NullLogger<ExecutionAgent>.Instance, Persistence, window);
     }
 
     public Task Propose() => Agent.ProposeAsync("EUR_USD", BuySignal, CancellationToken.None);

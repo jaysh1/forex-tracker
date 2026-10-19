@@ -41,6 +41,8 @@ else
                 <dd class="@PnlClass(_state.Status.DayPnl)">@Signed(_state.Status.DayPnl)</dd>
                 <dt>Trading</dt>
                 <dd>@(_state.Status.CanTrade ? "Active" : "Paused")</dd>
+                <dt>Hours</dt>
+                <dd>@(_state.Status.InTradingHours ? "Open now" : "Closed now") <span class="muted">(@_state.Status.TradingHours)</span></dd>
             </dl>
             @if (!_state.Status.CanTrade && _state.Status.Reason is not null)
             {

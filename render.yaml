@@ -1,6 +1,6 @@
 # Render Blueprint. In Render: New > Blueprint > pick your GitHub repo.
-# Check the plan name and price shown at creation time. The disk below needs a PAID instance;
-# free web services sleep after 15 min idle and have no persistent disk, which would stop the scanner.
+# Check the plan name and price shown at creation time. With SUPABASE_URL set the disk below is not needed;
+# free web services sleep after 15 min idle (keep them awake with a /health ping).
 services:
   - type: web
     name: forex-hitl
@@ -26,3 +26,13 @@ services:
         sync: false            # optional push notifications; leave blank to skip
       - key: PUBLIC_BASE_URL
         sync: false            # e.g. https://forex-hitl.onrender.com (used as the ntfy tap target)
+      - key: SUPABASE_URL
+        sync: false            # https://<ref>.supabase.co ; saves risk state + activity (no disk needed)
+      - key: SUPABASE_SECRET_KEY
+        sync: false            # the sb_secret_... key, never the publishable/anon key
+      - key: TRADING_HOURS
+        value: 09:00-17:00
+      - key: TRADING_DAYS
+        value: Mon-Fri
+      - key: TRADING_TIMEZONE
+        value: Australia/Melbourne

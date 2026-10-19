@@ -121,19 +121,46 @@ public class DailyRiskGuardTests
     }
 
     [Fact]
-    public void LockoutSurvivesRestart_WhenStateIsPersisted()
+    public void RestoredState_ContinuesWhereTheLastRunStopped()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"guard-{Guid.NewGuid():N}.json");
-        try
-        {
-            var first = new DailyRiskGuard(path);
-            first.Evaluate(10_000m, T0);
-            Assert.False(first.Evaluate(9_800m, T0.AddHours(1)).CanTrade);
+        var first = new DailyRiskGuard();
+        first.Evaluate(10_000m, T0);
+        Assert.False(first.Evaluate(9_800m, T0.AddHours(1)).CanTrade);
+        var saved = first.TakeDirtySnapshot()!;
 
-            var afterRestart = new DailyRiskGuard(path);
-            Assert.False(afterRestart.Evaluate(9_800m, T0.AddHours(2)).CanTrade);
-        }
-        finally { File.Delete(path); }
+        var second = new DailyRiskGuard(awaitingRestore: true);
+        second.Restore(saved);
+        Assert.False(second.Evaluate(9_800m, T0.AddHours(2)).CanTrade);   // still locked after the "restart"
+    }
+
+    [Fact]
+    public void GuardAwaitingRestore_RefusesToTradeUntilRestored()
+    {
+        var g = new DailyRiskGuard(awaitingRestore: true);
+        Assert.False(g.Ready);
+
+        var before = g.Evaluate(10_000m, T0);
+        Assert.False(before.CanTrade);
+        Assert.Equal(DailyRiskGuard.AwaitingRestoreReason, before.Reason);
+        Assert.Null(g.TakeDirtySnapshot());          // nothing may be saved from a guard that never loaded
+
+        g.Restore(null);
+        Assert.True(g.Ready);
+        Assert.True(g.Evaluate(10_000m, T0).CanTrade);
+    }
+
+    [Fact]
+    public void OnlyChangedStateIsMarkedForSaving()
+    {
+        var g = new DailyRiskGuard();
+        g.Evaluate(10_000m, T0);                     // sets the day's baseline: a change
+        Assert.NotNull(g.TakeDirtySnapshot());
+
+        g.Evaluate(10_010m, T0.AddMinutes(5));       // nothing changed
+        Assert.Null(g.TakeDirtySnapshot());
+
+        g.MarkDirty();                               // e.g. a failed save
+        Assert.NotNull(g.TakeDirtySnapshot());
     }
 
     [Fact]

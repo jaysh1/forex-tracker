@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 
 namespace ForexHitl;
 
@@ -11,27 +10,64 @@ public sealed class GuardState
     public decimal StartEquity { get; set; }
     public DateTime? LockedUntilUtc { get; set; }
     public string? LockReason { get; set; }
+
+    public GuardState Copy() => (GuardState)MemberwiseClone();
 }
 
 /// <summary>
 /// Enforces the daily drawdown cap (1.5% -> 24h lockout) and daily profit cap (1.0% -> stop until the
 /// next session). P&amp;L is measured on equity (NAV) against equity at the start of the forex day
 /// (rollover at 22:00 UTC, an approximation of 5pm New York), so open losses count.
-/// State is persisted so a restart cannot reset the day's baseline or clear a lockout.
+///
+/// The guard itself does no I/O. <see cref="GuardPersistence"/> loads its state at startup and saves it
+/// whenever it changes, so a restart cannot reset the day's baseline or clear a lockout. A guard created
+/// with <c>awaitingRestore: true</c> refuses to allow trading until <see cref="Restore"/> has been called.
 /// </summary>
 public sealed class DailyRiskGuard
 {
+    public const string AwaitingRestoreReason =
+        "Waiting for the saved risk state to load - trading stays paused until it does.";
+
     private static readonly TimeSpan SessionRollover = TimeSpan.FromHours(22);
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly object _gate = new();
-    private readonly string? _statePath;
-    private readonly GuardState _state;
+    private GuardState _state = new();
+    private bool _ready;
+    private bool _dirty;
 
-    public DailyRiskGuard(string? statePath = null)
+    public DailyRiskGuard(bool awaitingRestore = false) => _ready = !awaitingRestore;
+
+    public bool Ready
     {
-        _statePath = statePath;
-        _state = Load(statePath);
+        get { lock (_gate) return _ready; }
+    }
+
+    /// <summary>Installs previously saved state (null = nothing was saved yet) and allows trading decisions.</summary>
+    public void Restore(GuardState? saved)
+    {
+        lock (_gate)
+        {
+            _state = saved?.Copy() ?? new GuardState();
+            _ready = true;
+            _dirty = false;
+        }
+    }
+
+    /// <summary>The state to save if it changed since the last save; null if there is nothing new.</summary>
+    public GuardState? TakeDirtySnapshot()
+    {
+        lock (_gate)
+        {
+            if (!_dirty) return null;
+            _dirty = false;
+            return _state.Copy();
+        }
+    }
+
+    /// <summary>Called when a save failed, so the next flush tries again.</summary>
+    public void MarkDirty()
+    {
+        lock (_gate) _dirty = true;
     }
 
     public static DateTime SessionStart(DateTime nowUtc)
@@ -44,6 +80,8 @@ public sealed class DailyRiskGuard
     {
         lock (_gate)
         {
+            if (!_ready) return new GuardStatus(false, AwaitingRestoreReason, 0m, false);
+
             var changed = false;
             var session = SessionStart(nowUtc);
 
@@ -73,48 +111,25 @@ public sealed class DailyRiskGuard
                 {
                     _state.LockedUntilUtc = nowUtc + RiskLimits.DrawdownLockout;
                     _state.LockReason =
-                        $"Daily drawdown cap hit (P&L {F(pnl)} USD, limit -{F(drawdownLimit)}). Trading paused for 24h.";
+                        $"Daily drawdown cap hit (P&L {F(pnl)}, limit -{F(drawdownLimit)}). Trading paused for 24h.";
                     newlyLocked = true;
                 }
                 else if (pnl >= profitTarget)
                 {
                     _state.LockedUntilUtc = session + TimeSpan.FromHours(24);
                     _state.LockReason =
-                        $"Daily profit target reached (P&L +{F(pnl)} USD, target +{F(profitTarget)}). Trading stopped until the next session.";
+                        $"Daily profit target reached (P&L +{F(pnl)}, target +{F(profitTarget)}). Trading stopped until the next session.";
                     newlyLocked = true;
                 }
 
                 changed |= newlyLocked;
             }
 
-            if (changed) Save();
+            if (changed) _dirty = true;
 
             return new GuardStatus(_state.LockedUntilUtc is null, _state.LockReason, pnl, newlyLocked);
         }
     }
 
     private static string F(decimal v) => v.ToString("F2", CultureInfo.InvariantCulture);
-
-    private static GuardState Load(string? path)
-    {
-        if (path is null || !File.Exists(path)) return new GuardState();
-        try
-        {
-            return JsonSerializer.Deserialize<GuardState>(File.ReadAllText(path)) ?? new GuardState();
-        }
-        catch (Exception ex) when (ex is JsonException or IOException)
-        {
-            return new GuardState();
-        }
-    }
-
-    private void Save()
-    {
-        if (_statePath is null) return;
-        var dir = Path.GetDirectoryName(Path.GetFullPath(_statePath));
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = _statePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(_state, JsonOptions));
-        File.Move(tmp, _statePath, overwrite: true);
-    }
 }
