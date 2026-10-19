@@ -179,6 +179,9 @@ public sealed class ExecutionAgent
                 Units = units,
                 RiskUsd = Math.Round(RiskManager.RiskUsd(p.Instrument, units, p.StopLossPips, fx), 2)
             };
+            // The checks above make network calls; the window may have closed while they ran.
+            if (!InTradingHours) return Refuse(p, $"Outside trading hours ({_window.Describe()})");
+
             OrderResult result;
             try
             {

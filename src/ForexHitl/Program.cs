@@ -17,8 +17,13 @@ builder.Services.AddSingleton<SessionAuth>();
 
 // State store: Supabase when configured, otherwise a local file (only durable on a persistent disk).
 if (config.SupabaseUrl is not null)
-    builder.Services.AddHttpClient<IStateStore, SupabaseStateStore>(c =>
+{
+    builder.Services.AddHttpClient<SupabaseStateStore>(c =>
         SupabaseStateStore.Configure(c, config.SupabaseUrl, config.SupabaseSecretKey!));
+    var scope = $"{(config.UseLive ? "live" : "practice")}:{config.OandaAccountId}:";
+    builder.Services.AddSingleton<IStateStore>(sp =>
+        new ScopedStateStore(sp.GetRequiredService<SupabaseStateStore>(), scope));
+}
 else
     builder.Services.AddSingleton<IStateStore>(new FileStateStore(config.GuardStatePath));
 

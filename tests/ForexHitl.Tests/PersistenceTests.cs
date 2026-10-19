@@ -61,6 +61,45 @@ public class GuardPersistenceTests
         Assert.Contains("10000", store.Data["guard"]);
     }
 
+    private static string Json(string start, decimal equity, string? lockedUntil = null, string? reason = null) =>
+        "{\"SessionStartUtc\":\"" + start + "\",\"StartEquity\":" + equity.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+        ",\"LockedUntilUtc\":" + (lockedUntil is null ? "null" : "\"" + lockedUntil + "\"") +
+        ",\"LockReason\":" + (reason is null ? "null" : "\"" + reason + "\"") + "}";
+
+    // The fake clock reads 2026-10-14 10:00Z, so the current session started 2026-10-13 22:00Z.
+    [Theory]
+    [InlineData("2026-10-13T22:00:00Z", 0, null, null)]                                   // zero baseline
+    [InlineData("0001-01-01T00:00:00Z", 10000, null, null)]                               // no session
+    [InlineData("2026-10-13T09:30:00Z", 10000, null, null)]                               // not a session boundary
+    [InlineData("2026-10-14T22:00:00Z", 10000, null, null)]                               // session in the future
+    [InlineData("2026-10-13T22:00:00Z", 10000, "2026-10-15T00:00:00Z", null)]             // lock without a reason
+    [InlineData("2026-10-13T22:00:00Z", 10000, "2026-10-15T00:00:00", "Daily loss cap")]  // lock time without UTC marker
+    public async Task NonsenseSavedState_KeepsTradingPaused(string start, int equity, string? until, string? reason)
+    {
+        var store = new FakeStore();
+        store.Data["guard"] = Json(start, equity, until, reason);
+        var r = Make(store);
+
+        await r.Persistence.EnsureLoadedAsync(CancellationToken.None);
+
+        Assert.False(r.Guard.Ready);
+        Assert.False(r.Guard.Evaluate(10_000m, T0).CanTrade);
+        Assert.True(Mentions(r, "invalid"));
+    }
+
+    [Fact]
+    public async Task SensibleSavedState_IsRestored()
+    {
+        var store = new FakeStore();
+        store.Data["guard"] = Json("2026-10-13T22:00:00Z", 10000, "2026-10-15T00:00:00Z", "Daily loss cap");
+        var r = Make(store);
+
+        await r.Persistence.EnsureLoadedAsync(CancellationToken.None);
+
+        Assert.True(r.Guard.Ready);
+        Assert.False(r.Guard.Evaluate(10_000m, T0).CanTrade);   // the saved lockout is honoured
+    }
+
     [Fact]
     public async Task LockoutSurvivesARestart()
     {
@@ -589,5 +628,24 @@ public class SupabaseAndHoursConfigTests
 
         Rejected(new() { ["TRADING_HOURS"] = "nine to five" });
         Rejected(new() { ["TRADING_TIMEZONE"] = "Mars/Olympus" });
+    }
+}
+
+
+public class ScopedStateStoreTests
+{
+    [Fact]
+    public async Task KeysArePrefixed_SoAccountsDoNotShareState()
+    {
+        var inner = new FakeStore();
+        var practice = new ScopedStateStore(inner, "practice:101-1:");
+        var live = new ScopedStateStore(inner, "live:001-9:");
+
+        await practice.SaveAsync("guard", "{\"a\":1}", CancellationToken.None);
+
+        Assert.True(inner.Data.ContainsKey("practice:101-1:guard"));
+        Assert.Equal("{\"a\":1}", await practice.LoadAsync("guard", CancellationToken.None));
+        Assert.Null(await live.LoadAsync("guard", CancellationToken.None));
+        Assert.Equal("fake store", practice.Name);
     }
 }

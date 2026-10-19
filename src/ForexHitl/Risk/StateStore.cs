@@ -64,6 +64,17 @@ public sealed class FileStateStore : IStateStore
 }
 
 /// <summary>
+/// Prefixes every key, so one table can hold state for several accounts or environments
+/// (for example "practice:101-001:guard") and one can never load another's baseline or lockout.
+/// </summary>
+public sealed class ScopedStateStore(IStateStore inner, string scope) : IStateStore
+{
+    public string Name => inner.Name;
+    public Task<string?> LoadAsync(string key, CancellationToken ct) => inner.LoadAsync(scope + key, ct);
+    public Task SaveAsync(string key, string json, CancellationToken ct) => inner.SaveAsync(scope + key, json, ct);
+}
+
+/// <summary>
 /// Supabase via its REST (PostgREST) API: one table, bot_state(key text primary key, value jsonb, updated_at).
 /// Needs the project URL and a SECRET key, so it must only ever run on the server.
 /// </summary>

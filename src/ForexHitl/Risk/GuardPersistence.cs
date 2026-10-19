@@ -48,6 +48,7 @@ public sealed class GuardPersistence
                 var json = await _store.LoadAsync(StateKeys.Guard, ct);
                 var saved = json is null ? null : JsonSerializer.Deserialize<GuardState>(json);
                 if (json is not null && saved is null) throw new JsonException("saved state was empty");
+                if (saved is not null) Validate(saved, _time.GetUtcNow().UtcDateTime);
 
                 _guard.Restore(saved);
                 _lastProblem = null;
@@ -65,6 +66,21 @@ public sealed class GuardPersistence
         {
             _io.Release();
         }
+    }
+
+    /// <summary>
+    /// A saved row that makes no sense (zero baseline, a session start that is not a session boundary or lies in
+    /// the future, a lockout with no reason) is not trusted: better to stay paused than to trade on bad numbers.
+    /// </summary>
+    internal static void Validate(GuardState s, DateTime nowUtc)
+    {
+        bool bad =
+            s.StartEquity <= 0 ||
+            s.SessionStartUtc == default || s.SessionStartUtc.Kind != DateTimeKind.Utc ||
+            s.SessionStartUtc != DailyRiskGuard.SessionStart(s.SessionStartUtc) ||
+            s.SessionStartUtc > DailyRiskGuard.SessionStart(nowUtc) ||
+            (s.LockedUntilUtc is { } until && (until.Kind != DateTimeKind.Utc || string.IsNullOrWhiteSpace(s.LockReason)));
+        if (bad) throw new JsonException("the saved risk state is invalid (inspect the bot_state table)");
     }
 
     /// <summary>Saves the guard state if it changed. Never throws (except on cancellation).</summary>

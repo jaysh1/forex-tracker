@@ -63,7 +63,7 @@ create table if not exists public.bot_state (
 );
 alter table public.bot_state enable row level security;   -- no policies: only the secret key can use the table
 revoke all on public.bot_state from anon, authenticated;
-grant all on public.bot_state to service_role;
+grant select, insert, update on public.bot_state to service_role;
 ```
 
 How it behaves:
@@ -76,6 +76,8 @@ How it behaves:
 - The risk state is saved the moment it changes; the activity feed is saved every 10 seconds, and both once more on shutdown.
 - Without `SUPABASE_URL`, state goes to a local file (`GUARD_STATE_PATH`), which only survives restarts on a
   persistent disk. With Supabase you do **not** need a disk, so a free Render instance no longer loses the daily-loss state.
+- Rows are keyed by environment and account (`practice:<account id>:guard`), so switching between practice and live, or between accounts, never loads another one's baseline or lockout.
+- A saved risk state that does not make sense (zero baseline, bad session time, a lock with no reason) is treated like an unreadable one: trading stays paused.
 - For local development against the Supabase CLI's stack, `http://127.0.0.1:54321` is accepted; every other URL must be https.
 
 ## Environment variables

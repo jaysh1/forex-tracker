@@ -1,0 +1,18 @@
+name: .NET validation
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test ForexHitl.sln --configuration Release
+      - run: dotnet publish src/ForexHitl.Client --configuration Release --output /tmp/forex-client
+      - run: dotnet publish src/ForexHitl --configuration Release --output /tmp/forex-server

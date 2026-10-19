@@ -16,6 +16,7 @@ internal sealed class FakeBroker : IBrokerClient
     public bool ThrowOnOrder;
     public readonly List<TradeProposal> Orders = new();
     public int CandleCalls;
+    public Action? OnHasOpenPosition;
 
     public Task<AccountSummary> GetAccountAsync(CancellationToken ct) =>
         Task.FromResult(new AccountSummary(Nav, Nav, Currency));
@@ -31,8 +32,11 @@ internal sealed class FakeBroker : IBrokerClient
         return Task.FromResult<IReadOnlyList<Candle>>(new List<Candle>());
     }
 
-    public Task<bool> HasOpenPositionAsync(string instrument, CancellationToken ct) =>
-        Task.FromResult(OpenPosition);
+    public Task<bool> HasOpenPositionAsync(string instrument, CancellationToken ct)
+    {
+        OnHasOpenPosition?.Invoke();
+        return Task.FromResult(OpenPosition);
+    }
 
     public Task<OrderResult> PlaceMarketOrderAsync(TradeProposal proposal, CancellationToken ct)
     {

@@ -6,4 +6,4 @@ create table if not exists public.bot_state (
 );
 alter table public.bot_state enable row level security;   -- no policies: only the secret key can use the table
 revoke all on public.bot_state from anon, authenticated;
-grant all on public.bot_state to service_role;
+grant select, insert, update on public.bot_state to service_role;

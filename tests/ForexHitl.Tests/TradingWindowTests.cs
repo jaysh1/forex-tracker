@@ -164,6 +164,21 @@ public class TradingHoursEnforcementTests
     }
 
     [Fact]
+    public async Task WindowClosesWhileTheApprovalChecksRun_PlacesNothing()
+    {
+        var h = MakeHarness(LastMinutes);
+        var p = await h.ProposeOne();
+        // Inside hours when approval starts; the clock passes 17:00 during the position check just before the order.
+        h.Broker.OnHasOpenPosition = () => h.Clock.Advance(TimeSpan.FromMinutes(3));
+
+        var result = await h.Decide("approve", p.Id);
+
+        Assert.False(result.Executed);
+        Assert.Contains("Outside trading hours", result.Message);
+        Assert.Equal(0, h.Broker.Orders.Count);
+    }
+
+    [Fact]
     public async Task RejectStillWorks_AfterTheWindowCloses()
     {
         var h = MakeHarness(LastMinutes);

@@ -1,23 +1,23 @@
-# Render Blueprint. In Render: New > Blueprint > pick your GitHub repo.
-# Check the plan name and price shown at creation time. With SUPABASE_URL set the disk below is not needed;
-# free web services sleep after 15 min idle (keep them awake with a /health ping).
+# Render Blueprint matching the existing forex-tracker service (free plan).
+# Free instances sleep after ~15 min idle: ping /health every 10 min to keep the scanner running.
+# State (daily-loss baseline, lockout, activity) is saved to Supabase, so no disk is needed.
 services:
   - type: web
-    name: forex-hitl
+    name: forex-tracker
     runtime: docker
+    plan: free
+    region: oregon
+    repo: https://github.com/jaysh1/forex-tracker.git
+    branch: main
     dockerfilePath: ./Dockerfile
-    plan: 0.5c-512mb
+    dockerContext: .
     healthCheckPath: /health
     autoDeployTrigger: "off"   # redeploy by hand; a bot that trades should not restart on every commit
-    disk:
-      name: forex-state
-      mountPath: /app/data     # daily-loss baseline + lockout survive restarts and deploys
-      sizeGB: 1
     envVars:
       - key: OANDA_ENVIRONMENT
         value: practice
       - key: OANDA_API_TOKEN
-        sync: false            # Render prompts for these on first creation
+        sync: false
       - key: OANDA_ACCOUNT_ID
         sync: false
       - key: APPROVER_PASSWORD
@@ -25,9 +25,9 @@ services:
       - key: NTFY_TOPIC
         sync: false            # optional push notifications; leave blank to skip
       - key: PUBLIC_BASE_URL
-        sync: false            # e.g. https://forex-hitl.onrender.com (used as the ntfy tap target)
+        sync: false            # e.g. https://forex-tracker.onrender.com (used as the ntfy tap target)
       - key: SUPABASE_URL
-        sync: false            # https://<ref>.supabase.co ; saves risk state + activity (no disk needed)
+        sync: false            # https://<ref>.supabase.co
       - key: SUPABASE_SECRET_KEY
         sync: false            # the sb_secret_... key, never the publishable/anon key
       - key: TRADING_HOURS
