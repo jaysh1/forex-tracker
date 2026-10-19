@@ -1,6 +1,7 @@
 bin/
 obj/
 data/
+client-out/
 .env
 *.user
 .vs/
