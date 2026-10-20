@@ -1,4 +1,4 @@
-# Forex HITL Assistant (.NET 8)
+# Forex HITL Assistant (.NET 10)
 
 Cloud-native forex signal assistant with human-in-the-loop approval through a mobile web page
 (Blazor WebAssembly). Talks directly to OANDA v20 over HTTPS - no desktop terminal.
