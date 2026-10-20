@@ -1,5 +1,5 @@
 # Builds the API server and the Blazor WebAssembly client into one image.
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY src/ ./src/
 
@@ -11,7 +11,7 @@ RUN dotnet publish src/ForexHitl.Client/ForexHitl.Client.csproj -c Release -o /c
  && mkdir -p /out/wwwroot \
  && cp -r /client/wwwroot/. /out/wwwroot/
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 # Fail the image build, not the first start, if the runtime image lacks the timezone data trading hours need.
 RUN test -f /usr/share/zoneinfo/Australia/Melbourne

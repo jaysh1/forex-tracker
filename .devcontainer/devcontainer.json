@@ -1,6 +1,6 @@
 {
-  "name": "Forex HITL (.NET 8)",
-  "image": "mcr.microsoft.com/devcontainers/dotnet:1-8.0",
+  "name": "Forex HITL (.NET 10)",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:1-10.0",
   "forwardPorts": [5000],
   "portsAttributes": {
     "5000": { "label": "Approval page", "onAutoForward": "notify" }
