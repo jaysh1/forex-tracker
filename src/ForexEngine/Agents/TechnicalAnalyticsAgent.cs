@@ -15,6 +15,7 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
     private readonly ActivityLog _activity;
     private readonly TradingWindow _window;
     private readonly TimeProvider _time;
+    private readonly ScanStatusStore? _scanStatus;
     private readonly Dictionary<string, DateTime> _lastCandle = new();
     private string? _lastError;
     private DateTime _lastErrorAtUtc = DateTime.MinValue;
@@ -22,7 +23,8 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
 
     public TechnicalAnalyticsAgent(
         IBrokerClient broker, ExecutionAgent execution, AppConfig config, ActivityLog activity,
-        TradingWindow window, TimeProvider time, ILogger<TechnicalAnalyticsAgent> log)
+        TradingWindow window, TimeProvider time, ILogger<TechnicalAnalyticsAgent> log,
+        ScanStatusStore? scanStatus = null)
     {
         _broker = broker;
         _execution = execution;
@@ -31,6 +33,7 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
         _window = window;
         _time = time;
         _log = log;
+        _scanStatus = scanStatus;
     }
 
     /// <summary>
@@ -110,28 +113,64 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
 
         var inHours = _window.IsOpen(_time.GetUtcNow().UtcDateTime);
         NoteTradingHours(inHours);
-        if (!inHours || !status.CanTrade) return;
-
         foreach (var instrument in _config.Instruments)
         {
             try
             {
+                var quote = await _broker.GetQuoteAsync(instrument, ct);
+                var now = _time.GetUtcNow().UtcDateTime;
+                _scanStatus?.SetPrice(quote);
+
+                if (!inHours)
+                {
+                    _scanStatus?.SetExplanation(instrument,
+                        $"Not checking for entries: trading hours are closed ({_window.Describe()}).", now);
+                    continue;
+                }
+                if (!status.CanTrade)
+                {
+                    _scanStatus?.SetExplanation(instrument,
+                        $"Not checking for entries: {status.Reason ?? "trading is paused by the risk guard."}", now);
+                    continue;
+                }
+                if (!quote.Tradeable)
+                {
+                    _scanStatus?.SetExplanation(instrument, "OANDA reports this market is not tradeable right now.", now);
+                    continue;
+                }
+
                 var m5 = await _broker.GetCandlesAsync(instrument, "M5", 150, ct);
-                if (m5.Count == 0) continue;
+                if (m5.Count == 0)
+                {
+                    _scanStatus?.SetExplanation(instrument, "OANDA returned no completed 5-minute candles.", now);
+                    continue;
+                }
 
                 var latest = m5[^1].TimeUtc;
                 var seen = _lastCandle.TryGetValue(instrument, out var prev);
                 _lastCandle[instrument] = latest;
-                if (!seen || latest <= prev) continue; // first sighting (possibly stale) or no new candle
+                if (!seen)
+                {
+                    _scanStatus?.SetExplanation(instrument,
+                        "Price is updating. Waiting for the next completed 5-minute candle before evaluating a new entry.", now);
+                    continue;
+                }
+                if (latest <= prev) continue; // The stored setup explanation remains current until the next completed candle.
 
                 var m15 = await _broker.GetCandlesAsync(instrument, "M15", 500, ct);
-                if (SignalEngine.Evaluate(m5, m15) is { } signal)
-                    await _execution.ProposeAsync(instrument, signal, ct);
+                var evaluation = SignalEngine.EvaluateWithReason(m5, m15);
+                var explanation = evaluation.Signal is { } signal
+                    ? await _execution.ProposeAsync(instrument, signal, ct)
+                    : evaluation.Explanation;
+                _scanStatus?.SetExplanation(instrument, explanation, now);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.LogError(ex, "Scan failed for {Instrument}", instrument);
-                ReportFailure($"{instrument}: {Describe(ex)}");
+                var message = Describe(ex);
+                _scanStatus?.SetExplanation(instrument,
+                    $"Could not complete this pair's check: {message}", _time.GetUtcNow().UtcDateTime);
+                ReportFailure($"{instrument}: {message}");
             }
         }
     }

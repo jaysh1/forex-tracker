@@ -1,14 +1,14 @@
-# Forex HITL Assistant (.NET 8)
+# Forex HITL Assistant (.NET 10 + Vue)
 
-Cloud-native forex signal assistant with human-in-the-loop approval through a mobile web page
-(Blazor WebAssembly). Talks directly to OANDA v20 over HTTPS - no desktop terminal.
+Cloud-native forex signal assistant with human-in-the-loop approval through a Vue mobile web page.
+The .NET backend talks directly to OANDA v20 over HTTPS - no desktop terminal.
 **Defaults to OANDA's practice (paper) environment.**
 
 ```
 TechnicalAnalyticsAgent --signal--> ExecutionAgent --queues--> Pending list
    (5m/15m, EMA, RSI)                 |  ^ sizes + gates          |
                                       |  +-- GatekeeperAgent      v
-                                      |      (spread, news)   Blazor WASM page (password login)
+                                      |      (spread, news)   Vue page (password login)
                                       +<--- POST /api/proposals/{id}/approve | reject
                                       v   re-validates, then POSTs the order to OANDA
 ```
@@ -126,15 +126,27 @@ Open the service URL and sign in with `APPROVER_PASSWORD`. The Account card fill
 Render's health check at it. It only proves the web server is up, not that the scanner is working; for that, look at
 the Account card on the page (a yellow banner appears if the scanner stops reporting).
 
-## Develop in GitHub Codespaces
+## Develop locally
+
+The Vue dashboard uses Vite hot module replacement. Keep the API and UI running in separate terminals; UI edits appear in the browser without rebuilding the .NET app or restarting the API.
+
+Terminal 1 (the usual local environment variables can also come from `launchSettings.json`):
 
 ```bash
-dotnet test
-# server on :5000 (client must be published into the server's wwwroot to see the UI):
-dotnet publish src/ForexHitl.Client -c Release -o /tmp/client
-mkdir -p src/ForexHitl/wwwroot && cp -r /tmp/client/wwwroot/. src/ForexHitl/wwwroot/
-dotnet run --project src/ForexHitl --urls http://0.0.0.0:5000
+dotnet run --project src/ForexHitl --urls http://localhost:5000
 ```
+
+Terminal 2:
+
+```bash
+cd src/ForexHitl.Web
+npm ci
+npm run dev
+```
+
+Open <http://localhost:5173>. Vite proxies `/api` requests to the .NET server on port 5000. Run `npm run build` when you want to generate the production client files; the Docker build does this automatically.
+
+Run the backend tests with `dotnet test` from the repository root.
 
 ## Deploy to Render
 
@@ -153,4 +165,4 @@ persistent disk). Keep it to **one instance**: pending approvals and the guard l
 - If an order request fails in flight, the outcome is unknown; the page tells you to check OANDA rather than retrying.
 - Only USD-quoted majors (EUR_USD, GBP_USD) are supported; other pairs need pip-value conversion.
 - Sessions and the activity feed are in memory: a restart signs you out and clears the feed (guard state is kept).
-- The Blazor client DTOs (`src/ForexHitl.Client/Dtos.cs`) are a copy of the server's (`Approval/ApiModels.cs`); keep them in sync.
+- The Vue dashboard is presentation-only. Its TypeScript API types (`src/ForexHitl.Web/src/types.ts`) mirror the server display contracts in `src/ForexHitl/DashboardPresentation.cs`; keep them in sync. Trading calculations, decisions, and formatted display values stay on the backend.

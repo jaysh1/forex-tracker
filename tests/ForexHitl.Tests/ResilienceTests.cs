@@ -8,11 +8,14 @@ internal sealed class ScriptedHandler : HttpMessageHandler
     public int Calls;
     public int FailFirst;                 // throw a connection-level error for this many calls
     public bool AlwaysFail;
+    public HttpStatusCode? FirstStatus;
     public string Json = """{"account":{"NAV":"100000.0000","balance":"100000.0000","currency":"AUD"}}""";
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         Calls++;
+        if (Calls == 1 && FirstStatus is { } status)
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("temporary upstream failure") });
         if (AlwaysFail || Calls <= FailFirst)
             throw new HttpRequestException("An error occurred while sending the request.",
                 new IOException("Unable to read data from the transport connection: connection forcibly closed."));
@@ -22,7 +25,7 @@ internal sealed class ScriptedHandler : HttpMessageHandler
 
 public class OandaResilienceTests
 {
-    private static OandaClient Client(ScriptedHandler handler)
+    private static OandaClient Client(HttpMessageHandler handler)
     {
         var env = new Dictionary<string, string>
         {
@@ -44,7 +47,7 @@ public class OandaResilienceTests
     }
 
     [Fact]
-    public async Task PersistentFailure_OnARead_StopsAfterOneRetry()
+    public async Task PersistentFailure_OnARead_StopsAfterThreeAttempts()
     {
         var handler = new ScriptedHandler { AlwaysFail = true };
 
@@ -53,7 +56,30 @@ public class OandaResilienceTests
         catch (HttpRequestException) { threw = true; }
 
         Assert.True(threw);
+        Assert.Equal(3, handler.Calls);
+    }
+
+    [Fact]
+    public async Task GatewayTimeout_OnARead_IsRetriedAndSucceeds()
+    {
+        var handler = new ScriptedHandler { FirstStatus = HttpStatusCode.GatewayTimeout };
+        var acct = await Client(handler).GetAccountAsync(CancellationToken.None);
+
         Assert.Equal(2, handler.Calls);
+        Assert.Equal(100_000m, acct.Nav);
+    }
+
+    [Fact]
+    public async Task PersistentGatewayTimeout_OnARead_StopsAfterThreeAttempts()
+    {
+        var persistent = new PersistentStatusHandler(HttpStatusCode.GatewayTimeout);
+        BrokerException? failure = null;
+        try { await Client(persistent).GetAccountAsync(CancellationToken.None); }
+        catch (BrokerException ex) { failure = ex; }
+
+        Assert.NotNull(failure);
+        Assert.Contains("after 3 attempts", failure.Message);
+        Assert.Equal(3, persistent.Calls);
     }
 
     [Fact]
@@ -79,5 +105,15 @@ public class OandaResilienceTests
         Assert.Equal("An error occurred while sending the request. -> connection forcibly closed",
             TechnicalAnalyticsAgent.Describe(ex));
         Assert.Equal("plain", TechnicalAnalyticsAgent.Describe(new InvalidOperationException("plain")));
+    }
+}
+
+internal sealed class PersistentStatusHandler(HttpStatusCode status) : HttpMessageHandler
+{
+    public int Calls;
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Calls++;
+        return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("upstream failure") });
     }
 }

@@ -2,6 +2,8 @@ bin/
 obj/
 data/
 client-out/
+node_modules/
+src/ForexHitl/wwwroot/
 .env
 *.user
 .vs/

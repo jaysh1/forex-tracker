@@ -109,8 +109,8 @@ public sealed class OandaClient : IBrokerClient
 
     private async Task<JsonDocument> GetAsync(string path, CancellationToken ct)
     {
-        // Reads are idempotent, so ONE quick retry after a connection-level failure (dropped or reset
-        // connection, brief network blip) is safe. Order placement (POST) is deliberately never retried.
+        // Reads are idempotent, so a short bounded retry is safe for network failures and transient
+        // gateway/server errors. Order placement (POST) is deliberately never retried.
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -118,15 +118,29 @@ public sealed class OandaClient : IBrokerClient
                 using var resp = await _http.GetAsync(path, ct);
                 var body = await resp.Content.ReadAsStringAsync(ct);
                 if (!resp.IsSuccessStatusCode)
-                    throw new BrokerException($"OANDA {(int)resp.StatusCode} on GET {path.Split('?')[0]}: {body}");
+                {
+                    if (attempt < 3 && IsTransient(resp.StatusCode) && !ct.IsCancellationRequested)
+                    {
+                        resp.Dispose();
+                        await Task.Delay(TimeSpan.FromSeconds(attempt), ct);
+                        continue;
+                    }
+                    var attempts = attempt > 1 ? $" after {attempt} attempts" : "";
+                    throw new BrokerException($"OANDA {(int)resp.StatusCode}{attempts} on GET {path.Split('?')[0]}: {body}");
+                }
                 return JsonDocument.Parse(body);
             }
-            catch (HttpRequestException) when (attempt == 1 && !ct.IsCancellationRequested)
+            catch (HttpRequestException) when (attempt < 3 && !ct.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                await Task.Delay(TimeSpan.FromSeconds(attempt), ct);
             }
         }
     }
+
+    private static bool IsTransient(System.Net.HttpStatusCode status) =>
+        status is System.Net.HttpStatusCode.BadGateway
+            or System.Net.HttpStatusCode.ServiceUnavailable
+            or System.Net.HttpStatusCode.GatewayTimeout;
 
     private static decimal Dec(JsonElement e, string name) =>
         decimal.Parse(e.GetProperty(name).GetString()!, NumberStyles.Float, CultureInfo.InvariantCulture);

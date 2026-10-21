@@ -1,5 +1,7 @@
 **/bin/
 **/obj/
+**/node_modules/
+src/ForexHitl/wwwroot/
 .git/
 .github/
 .devcontainer/

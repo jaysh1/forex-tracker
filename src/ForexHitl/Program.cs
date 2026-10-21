@@ -21,6 +21,9 @@ builder.Services.AddSingleton(new DailyRiskGuard(
 builder.Services.AddSingleton<GuardPersistence>();
 builder.Services.AddSingleton<PendingTradeStore>();
 builder.Services.AddSingleton<ActivityLog>();
+builder.Services.AddSingleton<ScanStatusStore>();
+builder.Services.AddSingleton<DashboardPresenter>();
+builder.Services.AddSingleton<DecisionConfirmationStore>();
 builder.Services.AddSingleton<SessionAuth>();
 
 // State store: Supabase when configured, otherwise a local file (only durable on a persistent disk).
@@ -90,11 +93,10 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-// --- Blazor WebAssembly client (published into wwwroot by the Dockerfile) -------------------------------
+// --- Vue client (built into wwwroot by the Dockerfile) -------------------------------------------------
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
-    ServeUnknownFileTypes = true, // Blazor ships .dat/.blat/.dll/.wasm files
     OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache" // always revalidate after a deploy
 });
 
@@ -134,48 +136,56 @@ secured.MapPost("/logout", (HttpRequest request, SessionAuth auth) =>
     return Results.NoContent();
 });
 
-secured.MapGet("/cfd/state", (CfdPracticeAgent cfd) => Results.Ok(cfd.Snapshot()));
-secured.MapPost("/cfd/proposals/{id}/{action}", async (string id, string action, CfdPracticeAgent cfd, ILogger<Program> log) =>
+secured.MapGet("/cfd/state", (
+    CfdPracticeAgent cfd, DashboardPresenter presenter, DecisionConfirmationStore confirmations, TimeProvider time) =>
+    Results.Ok(presenter.Cfd(cfd.Snapshot(), confirmations, time.GetUtcNow().UtcDateTime)));
+secured.MapPost("/cfd/proposals/{id}/{action}", async (
+    string id, string action, CfdPracticeAgent cfd, DashboardPresenter presenter,
+    DecisionConfirmationStore confirmations, TimeProvider time, ILogger<Program> log) =>
 {
-    try { return Results.Ok(await cfd.DecideAsync(action, id, CancellationToken.None)); }
+    if (action is not ("approve" or "reject")) return Results.BadRequest();
+    if (action == "approve" && !confirmations.TryConfirm("cfd", id, time.GetUtcNow().UtcDateTime))
+        return Results.Ok(new DashboardActionResult(true, false, true, "Tap approve again within 20 seconds to confirm."));
+    if (action == "reject") confirmations.Clear("cfd", id);
+    try { return Results.Ok(presenter.CfdAction(await cfd.DecideAsync(action, id, CancellationToken.None), action)); }
     catch (Exception ex)
     {
         log.LogError(ex, "Failed handling CFD practice decision {Action} {Id}", action, id);
-        return Results.Ok(new { Executed = false, Message = "CFD order failed - check your OANDA practice account before retrying." });
+        return Results.Ok(new DashboardActionResult(false, false, false,
+            "CFD order failed - check your OANDA practice account before retrying."));
     }
 });
 
 secured.MapGet("/state", (
-    ExecutionAgent execution, PendingTradeStore store, ActivityLog activity, AppConfig cfg, TradingWindow hours,
-    TimeProvider time) =>
+    ExecutionAgent execution, PendingTradeStore store, ActivityLog activity, ScanStatusStore scanStatus,
+    DecisionConfirmationStore confirmations,
+    AppConfig cfg, TradingWindow hours, DashboardPresenter presenter, TimeProvider time) =>
 {
     var s = execution.LastStatus;
     var now = time.GetUtcNow().UtcDateTime;
-    var status = new StatusDto(
-        cfg.UseLive ? "live" : "practice", s is not null, s?.UpdatedUtc, s?.Equity, s?.DayPnl,
-        s?.CanTrade ?? true, s?.Reason, now, hours.IsOpen(now), hours.Describe());
-
-    var pending = store.Snapshot().Select(p => new PendingDto(
-        p.Id, p.Instrument, p.Side.ToString(), p.Units, p.EntryPrice, p.StopLoss, p.TakeProfit,
-        p.StopLossPips, p.RiskUsd, p.CreatedUtc, p.CreatedUtc + ExecutionAgent.ProposalTtl, p.Rationale)).ToList();
-
-    var feed = activity.Snapshot().Select(a => new ActivityDto(a.TimeUtc, a.Kind, a.Text)).ToList();
-    return Results.Ok(new StateDto(status, pending, feed));
+    return Results.Ok(presenter.Forex(cfg.UseLive, s, hours, now,
+        scanStatus.Snapshot(), store.Snapshot(), activity.Snapshot(), confirmations));
 });
 
-secured.MapPost("/proposals/{id}/{action}", async (string id, string action, ExecutionAgent execution, ILogger<Program> log) =>
+secured.MapPost("/proposals/{id}/{action}", async (
+    string id, string action, ExecutionAgent execution, DashboardPresenter presenter,
+    DecisionConfirmationStore confirmations, TimeProvider time, ILogger<Program> log) =>
 {
     if (action is not ("approve" or "reject")) return Results.BadRequest();
+    if (action == "approve" && !confirmations.TryConfirm("forex", id, time.GetUtcNow().UtcDateTime))
+        return Results.Ok(new DashboardActionResult(true, false, true, "Tap approve again within 20 seconds to confirm."));
+    if (action == "reject") confirmations.Clear("forex", id);
     try
     {
         // CancellationToken.None on purpose: if the phone drops the connection we must not abort a
         // half-sent order. HttpClient timeouts bound the work.
-        return Results.Ok(await execution.HandleDecisionAsync(action, id, CancellationToken.None));
+        return Results.Ok(presenter.Action(await execution.HandleDecisionAsync(action, id, CancellationToken.None), action));
     }
     catch (Exception ex)
     {
         log.LogError(ex, "Failed handling decision {Action} {Id}", action, id);
-        return Results.Ok(new DecisionResult(false, "Error - check the logs and your OANDA account."));
+        return Results.Ok(new DashboardActionResult(false, false, false,
+            "Error - check the logs and your OANDA account."));
     }
 });
 
@@ -186,10 +196,8 @@ else
     app.MapFallback(() => Results.Content(
         "<!doctype html><meta charset=utf-8><title>Forex approver</title>" +
         "<body style=\"font-family:sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem\">" +
-        "<h1>Server is running, web page not built yet</h1>" +
-        "<p>Publish the Blazor client into this server's <code>wwwroot</code> folder, then restart:</p>" +
-        "<pre>dotnet publish src/ForexHitl.Client -c Release -o client-out\n" +
-        "(copy the contents of client-out/wwwroot into src/ForexHitl/wwwroot)</pre>" +
+        "<h1>API server is running</h1>" +
+        "<p>Start the Vue development server from <code>src/ForexHitl.Web</code> to open the dashboard.</p>" +
         "<p>The API is up: <a href=\"/health\">/health</a></p></body>", "text/html"));
 
 app.Run();

@@ -211,14 +211,17 @@ public class TradingHoursEnforcementTests
             ["OANDA_API_TOKEN"] = "t", ["OANDA_ACCOUNT_ID"] = "101-001-1-001", ["APPROVER_PASSWORD"] = "a-long-enough-password"
         };
         var config = AppConfig.FromEnvironment(k => env.GetValueOrDefault(k));
+        var scanStatus = new ScanStatusStore();
         var scanner = new TechnicalAnalyticsAgent(
             h.Broker, h.Agent, config, h.Activity, config.TradingHours, h.Clock,
-            NullLogger<TechnicalAnalyticsAgent>.Instance);
+            NullLogger<TechnicalAnalyticsAgent>.Instance, scanStatus);
 
         await scanner.TickAsync(CancellationToken.None);
         Assert.Equal(0, h.Broker.CandleCalls);
         Assert.NotNull(h.Agent.LastStatus);                          // the page still gets account figures
         Assert.True(h.ActivityMentions("Outside trading hours"));
+        Assert.Contains(scanStatus.Snapshot(), s => s.Instrument == "EUR_USD" &&
+            s.Bid == h.Broker.Bid && s.Ask == h.Broker.Ask && s.Explanation.Contains("hours are closed"));
 
         await scanner.TickAsync(CancellationToken.None);             // no change: no repeated message
         Assert.Equal(1, h.Activity.Snapshot().Count(a => a.Kind == "hours"));
@@ -228,5 +231,7 @@ public class TradingHoursEnforcementTests
         Assert.Equal(2, h.Broker.CandleCalls);                       // one M5 request per instrument
         Assert.True(h.ActivityMentions("Trading hours started"));
         Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "hours"));
+        Assert.Contains(scanStatus.Snapshot(), s => s.Instrument == "EUR_USD" &&
+            s.Explanation.Contains("no completed 5-minute candles"));
     }
 }

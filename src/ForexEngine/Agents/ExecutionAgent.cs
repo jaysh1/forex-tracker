@@ -2,7 +2,8 @@ using System.Globalization;
 
 namespace ForexHitl;
 
-public sealed record StatusSnapshot(DateTime UpdatedUtc, decimal Equity, decimal DayPnl, bool CanTrade, string? Reason);
+public sealed record StatusSnapshot(DateTime UpdatedUtc, decimal Equity, string Currency,
+    decimal DayPnl, bool CanTrade, string? Reason);
 
 /// <summary>
 /// Risk &amp; Execution Management: sizes trades, queues them for human approval, and - only after an
@@ -71,7 +72,7 @@ public sealed class ExecutionAgent
     {
         var acct = await _broker.GetAccountAsync(ct);
         var status = await EvaluateGuardAsync(acct.Nav, Now, ct);
-        _lastStatus = new StatusSnapshot(Now, acct.Nav, status.DayPnl, status.CanTrade, status.Reason);
+        _lastStatus = new StatusSnapshot(Now, acct.Nav, acct.Currency, status.DayPnl, status.CanTrade, status.Reason);
 
         if (status.NewlyLocked)
         {
@@ -82,24 +83,26 @@ public sealed class ExecutionAgent
         return status;
     }
 
-    public async Task ProposeAsync(string instrument, Signal signal, CancellationToken ct)
+    public async Task<string> ProposeAsync(string instrument, Signal signal, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (!InTradingHours) return;
-            if (_store.HasPending(instrument)) return;
+            if (!InTradingHours) return "Trading hours closed before the proposal could be checked.";
+            if (_store.HasPending(instrument)) return "A proposal for this pair is already waiting for your approval.";
 
             var acct = await _broker.GetAccountAsync(ct);
-            if (!(await EvaluateGuardAsync(acct.Nav, Now, ct)).CanTrade) return;
-            if (await _broker.HasOpenPositionAsync(instrument, ct)) return;
+            var guard = await EvaluateGuardAsync(acct.Nav, Now, ct);
+            if (!guard.CanTrade) return guard.Reason ?? "Trading is paused by the daily risk guard.";
+            if (await _broker.HasOpenPositionAsync(instrument, ct))
+                return "An open position already exists for this pair; the strategy allows only one at a time.";
 
             var gate = await _gatekeeper.CheckAsync(instrument, ct);
             if (!gate.Allowed)
             {
                 _log.LogInformation("{Instrument} signal blocked by gatekeeper: {Reason}", instrument, gate.Reason);
                 _activity.Add("blocked", $"{instrument} {signal.Side} signal skipped: {gate.Reason}");
-                return;
+                return gate.Reason ?? "The spread/news gate blocked this signal.";
             }
 
             var fx = await AccountCurrency.GetUsdToAccountAsync(_broker, acct.Currency, ct);
@@ -108,7 +111,7 @@ public sealed class ExecutionAgent
             {
                 _log.LogInformation("{Instrument} signal skipped: cannot size within risk/leverage limits", instrument);
                 _activity.Add("blocked", $"{instrument} {signal.Side} signal skipped: cannot size within risk/leverage limits");
-                return;
+                return "The signal could not be sized within the risk and leverage limits.";
             }
 
             _store.Add(proposal);
@@ -120,6 +123,7 @@ public sealed class ExecutionAgent
                 "Trade needs approval",
                 $"{instrument} {proposal.Side} {proposal.Units:N0} units, risk ${F(proposal.RiskUsd)}. Expires in {(int)ProposalTtl.TotalMinutes} min.",
                 urgent: false, ct);
+            return $"{signal.Side} signal found: a proposal is waiting for your approval. No order is placed until you approve it.";
         }
         finally
         {

@@ -98,7 +98,7 @@ internal sealed class Harness
             NullLogger<ExecutionAgent>.Instance, Persistence, window, maxRiskPerTrade);
     }
 
-    public Task Propose() => Agent.ProposeAsync("EUR_USD", BuySignal, CancellationToken.None);
+    public Task<string> Propose() => Agent.ProposeAsync("EUR_USD", BuySignal, CancellationToken.None);
 
     public async Task<TradeProposal> ProposeOne()
     {
@@ -166,10 +166,11 @@ public class ExecutionAgentProposeTests
     {
         var h = new Harness();
         h.Broker.Ask = h.Broker.Bid + 0.0001m;    // 1.0 pip > 0.5 pip cap
-        await h.Propose();
+        var explanation = await h.Propose();
 
         Assert.Equal(0, h.Store.Snapshot().Count);
         Assert.True(h.ActivityMentions("Spread"));
+        Assert.Contains("Spread", explanation);
     }
 
     [Fact]
@@ -177,8 +178,9 @@ public class ExecutionAgentProposeTests
     {
         var h = new Harness();
         h.Broker.OpenPosition = true;
-        await h.Propose();
+        var explanation = await h.Propose();
         Assert.Equal(0, h.Store.Snapshot().Count);
+        Assert.Contains("open position", explanation);
     }
 
     [Fact]

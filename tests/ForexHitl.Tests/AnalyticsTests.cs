@@ -80,6 +80,16 @@ public class SignalEngineTests
     }
 
     [Fact]
+    public void CounterTrendSetup_ExplainsWhyThereIsNoTrade()
+    {
+        var evaluation = SignalEngine.EvaluateWithReason(M5Fall(0.004m), Trend(1.2m, -0.0002m, 250));
+
+        Assert.Null(evaluation.Signal);
+        Assert.Contains("15-minute trend is down", evaluation.Explanation);
+        Assert.Contains("RSI", evaluation.Explanation);
+    }
+
+    [Fact]
     public void NoTrigger_NoSignal()
     {
         // Still falling (RSI stays below 30, never crosses back up).
@@ -90,6 +100,16 @@ public class SignalEngineTests
     public void InsufficientHistory_NoSignal()
     {
         Assert.Null(SignalEngine.Evaluate(M5Fall(0.004m), Trend(1.0m, 0.0002m, 150)));
+    }
+
+    [Fact]
+    public void InsufficientHistory_ExplainsWhatIsMissing()
+    {
+        var evaluation = SignalEngine.EvaluateWithReason(M5Fall(0.004m), Trend(1.0m, 0.0002m, 150));
+
+        Assert.Null(evaluation.Signal);
+        Assert.Contains("15-minute history", evaluation.Explanation);
+        Assert.Contains("200 candles", evaluation.Explanation);
     }
 }
 
