@@ -84,7 +84,8 @@ public static class CfdRiskSizer
         var budget = Math.Min(equity * CfdRiskLimits.RiskPerTradePercent / 100m, maxRiskPerTrade);
         var byRisk = Math.Floor(budget / (stopDistancePoints * quoteCurrencyPerPointPerUnit * quoteToAccount));
         var maxLeverage = Math.Min(CfdRiskLimits.MaxLeverage, 1m / contract.MarginRate);
-        var byMargin = Math.Floor(equity * maxLeverage / (entryPrice * quoteToAccount));
+        var byMargin = Math.Floor(equity * maxLeverage /
+            (entryPrice * quoteCurrencyPerPointPerUnit * quoteToAccount));
         var units = Math.Min(Math.Min(byRisk, byMargin), contract.MaximumUnits);
         return units < contract.MinimumUnits || units > long.MaxValue ? 0 : (long)units;
     }

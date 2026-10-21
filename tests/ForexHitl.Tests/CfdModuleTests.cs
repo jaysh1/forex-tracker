@@ -31,6 +31,17 @@ public sealed class CfdRiskSizerTests
     }
 
     [Fact]
+    public void CfdMarginSizingUsesTheConfiguredPointValue()
+    {
+        var contract = new CfdContract("SPX500_USD", 1, 0, 1m, 1m, 0.2m, "USD");
+
+        var units = CfdRiskSizer.CalculateUnits(contract, equity: 100_000m, stopDistancePoints: 0.1m,
+            quoteCurrencyPerPointPerUnit: 2m, entryPrice: 10_000m, quoteToAccount: 1m, maxRiskPerTrade: 500m);
+
+        Assert.Equal(25, units);
+    }
+
+    [Fact]
     public void LiveAccountsCannotEnableTheCfdPracticeModule()
     {
         var env = new Dictionary<string, string?>
