@@ -13,18 +13,18 @@ public sealed class CfdRiskSizerTests
     public void CfdUnitsStayWithinRiskBudgetAndMarginCap()
     {
         var contract = new CfdContract("AU200_AUD", 1, 0, 0.1m, 1m, 0.05m, "AUD");
-        var units = CfdRiskSizer.CalculateUnits(contract, equity: 10_000m, stopDistancePoints: 10m,
+        var units = CfdRiskSizer.CalculateUnits(contract, equity: 10_000m, stopDistancePoints: 10m, quoteCurrencyPerPointPerUnit: 1m,
             entryPrice: 8_000m, quoteToAccount: 1m, maxRiskPerTrade: 50m);
 
         Assert.Equal(5, units);
-        Assert.Equal(50m, CfdRiskSizer.MaxLoss(contract, units, 10m, 1m));
+        Assert.Equal(50m, CfdRiskSizer.MaxLoss(units, 10m, 1m, 1m));
     }
 
     [Fact]
     public void CfdSizingAlsoHonorsAccountMarginRate()
     {
         var contract = new CfdContract("SPX500_USD", 1, 0, 1m, 1m, 0.2m, "USD");
-        var units = CfdRiskSizer.CalculateUnits(contract, equity: 100_000m, stopDistancePoints: 0.1m,
+        var units = CfdRiskSizer.CalculateUnits(contract, equity: 100_000m, stopDistancePoints: 0.1m, quoteCurrencyPerPointPerUnit: 1m,
             entryPrice: 10_000m, quoteToAccount: 1m, maxRiskPerTrade: 500m);
 
         Assert.Equal(50, units); // 20% margin means at most 5:1 exposure.
@@ -42,6 +42,7 @@ public sealed class CfdRiskSizerTests
         env["CFD_INSTRUMENTS"] = "AU200_AUD";
         env["CFD_MAX_SPREAD_POINTS_AU200_AUD"] = "2";
         env["CFD_MAX_APPROVAL_DRIFT_POINTS_AU200_AUD"] = "4";
+        env["CFD_QUOTE_CURRENCY_PER_POINT_PER_UNIT_AU200_AUD"] = "1";
 
         Assert.Throws<InvalidOperationException>(() => CfdSettings.FromEnvironment(true, k => env.GetValueOrDefault(k)));
     }
@@ -54,7 +55,8 @@ public sealed class CfdRiskSizerTests
             ["OANDA_API_TOKEN"] = "token", ["OANDA_ACCOUNT_ID"] = "101-001-1-001",
             ["APPROVER_PASSWORD"] = "a-long-enough-password", ["CFD_INSTRUMENTS"] = "AU200_AUD,SPX500_USD",
             ["CFD_MAX_SPREAD_POINTS_AU200_AUD"] = "2", ["CFD_MAX_SPREAD_POINTS_SPX500_USD"] = "3",
-            ["CFD_MAX_APPROVAL_DRIFT_POINTS_AU200_AUD"] = "4", ["CFD_MAX_APPROVAL_DRIFT_POINTS_SPX500_USD"] = "6"
+            ["CFD_MAX_APPROVAL_DRIFT_POINTS_AU200_AUD"] = "4", ["CFD_MAX_APPROVAL_DRIFT_POINTS_SPX500_USD"] = "6",
+            ["CFD_QUOTE_CURRENCY_PER_POINT_PER_UNIT_AU200_AUD"] = "1", ["CFD_QUOTE_CURRENCY_PER_POINT_PER_UNIT_SPX500_USD"] = "1"
         };
         var forexConfig = AppConfig.FromEnvironment(k => env.GetValueOrDefault(k));
         var settings = CfdSettings.FromEnvironment(false, k => env.GetValueOrDefault(k));
@@ -64,13 +66,17 @@ public sealed class CfdRiskSizerTests
     }
 
     [Fact]
-    public void EnablingCfdRequiresAnExplicitInstrumentSpreadLimit()
+    public void EnablingCfdRequiresExplicitInstrumentSpecificLimits()
     {
-        var env = new Dictionary<string, string?> { ["CFD_INSTRUMENTS"] = "AU200_AUD" };
+        var env = new Dictionary<string, string?>
+        {
+            ["CFD_INSTRUMENTS"] = "AU200_AUD", ["CFD_MAX_SPREAD_POINTS_AU200_AUD"] = "2",
+            ["CFD_MAX_APPROVAL_DRIFT_POINTS_AU200_AUD"] = "4"
+        };
 
         var error = Assert.Throws<InvalidOperationException>(() => CfdSettings.FromEnvironment(false, key => env.GetValueOrDefault(key)));
 
-        Assert.Contains("CFD_MAX_SPREAD_POINTS_AU200_AUD", error.Message);
+        Assert.Contains("CFD_QUOTE_CURRENCY_PER_POINT_PER_UNIT_AU200_AUD", error.Message);
     }
 }
 
@@ -357,7 +363,8 @@ public sealed class CfdApprovalTests
             var settings = new CfdSettings(new[] { "AU200_AUD" },
                 CfdTradingWindow.Parse(hours, "Mon-Sun", "UTC"), 50m,
                 new Dictionary<string, decimal> { ["AU200_AUD"] = 2m },
-                new Dictionary<string, decimal> { ["AU200_AUD"] = 4m });
+                new Dictionary<string, decimal> { ["AU200_AUD"] = 4m },
+                new Dictionary<string, decimal> { ["AU200_AUD"] = 1m });
             var guard = new CfdDailyRiskGuard(50m, awaitingRestore: true);
             if (locked) guard.Restore(new CfdGuardState(CfdDailyRiskGuard.SessionStart(Now), 10_000m,
                 Now.AddHours(1), "test lock"));

@@ -7,7 +7,8 @@ namespace CFDEngine;
 
 /// <summary>CFD-specific settings and risk parameters. Deliberately separate from Forex AppConfig.</summary>
 public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWindow TradingHours, decimal MaxRiskPerTrade,
-    IReadOnlyDictionary<string, decimal> MaxSpreadPoints, IReadOnlyDictionary<string, decimal> MaxApprovalDriftPoints)
+    IReadOnlyDictionary<string, decimal> MaxSpreadPoints, IReadOnlyDictionary<string, decimal> MaxApprovalDriftPoints,
+    IReadOnlyDictionary<string, decimal> QuoteCurrencyPerPointPerUnit)
 {
     public bool Enabled => Instruments.Count > 0;
 
@@ -25,6 +26,7 @@ public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWi
 
         var spreadCaps = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var driftCaps = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var pointValues = new Dictionary<string, decimal>(StringComparer.Ordinal);
         foreach (var instrument in instruments)
         {
             var key = $"CFD_MAX_SPREAD_POINTS_{instrument}";
@@ -37,6 +39,11 @@ public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWi
             if (!decimal.TryParse(rawDrift, NumberStyles.Number, CultureInfo.InvariantCulture, out var drift) || drift <= 0)
                 throw new InvalidOperationException($"{driftKey} must be set to a positive price-point limit before enabling {instrument}.");
             driftCaps[instrument] = drift;
+            var valueKey = $"CFD_QUOTE_CURRENCY_PER_POINT_PER_UNIT_{instrument}";
+            var rawValue = get(valueKey);
+            if (!decimal.TryParse(rawValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var pointValue) || pointValue <= 0)
+                throw new InvalidOperationException($"{valueKey} must be set to a positive value from the OANDA contract specification before enabling {instrument}.");
+            pointValues[instrument] = pointValue;
         }
 
         var rawRisk = get("CFD_MAX_RISK_PER_TRADE");
@@ -45,7 +52,7 @@ public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWi
                 ? parsed : throw new InvalidOperationException("CFD_MAX_RISK_PER_TRADE must be positive.");
         var hours = CfdTradingWindow.Parse(get("CFD_TRADING_HOURS") ?? "always",
             get("CFD_TRADING_DAYS") ?? "Mon-Fri", get("CFD_TRADING_TIMEZONE"));
-        return new CfdSettings(instruments, hours, risk, spreadCaps, driftCaps);
+        return new CfdSettings(instruments, hours, risk, spreadCaps, driftCaps, pointValues);
     }
 }
 
@@ -68,22 +75,22 @@ public static class CfdRiskLimits
 
 public static class CfdRiskSizer
 {
-    public static long CalculateUnits(CfdContract contract, decimal equity, decimal stopDistancePoints,
+    public static long CalculateUnits(CfdContract contract, decimal equity, decimal stopDistancePoints, decimal quoteCurrencyPerPointPerUnit,
         decimal entryPrice, decimal quoteToAccount, decimal maxRiskPerTrade)
     {
         if (equity <= 0 || stopDistancePoints <= 0 || entryPrice <= 0 || quoteToAccount <= 0 ||
-            contract.PipSize <= 0 || contract.MarginRate <= 0 || maxRiskPerTrade <= 0)
+            quoteCurrencyPerPointPerUnit <= 0 || contract.PipSize <= 0 || contract.MarginRate <= 0 || maxRiskPerTrade <= 0)
             throw new ArgumentException("CFD equity, stop, price, conversion, margin, and risk cap must be positive.");
         var budget = Math.Min(equity * CfdRiskLimits.RiskPerTradePercent / 100m, maxRiskPerTrade);
-        var byRisk = Math.Floor(budget / (stopDistancePoints * quoteToAccount));
+        var byRisk = Math.Floor(budget / (stopDistancePoints * quoteCurrencyPerPointPerUnit * quoteToAccount));
         var maxLeverage = Math.Min(CfdRiskLimits.MaxLeverage, 1m / contract.MarginRate);
         var byMargin = Math.Floor(equity * maxLeverage / (entryPrice * quoteToAccount));
         var units = Math.Min(Math.Min(byRisk, byMargin), contract.MaximumUnits);
         return units < contract.MinimumUnits || units > long.MaxValue ? 0 : (long)units;
     }
 
-    public static decimal MaxLoss(CfdContract contract, long units, decimal stopDistancePoints, decimal quoteToAccount) =>
-        units * stopDistancePoints * quoteToAccount;
+    public static decimal MaxLoss(long units, decimal stopDistancePoints, decimal quoteCurrencyPerPointPerUnit, decimal quoteToAccount) =>
+        units * stopDistancePoints * quoteCurrencyPerPointPerUnit * quoteToAccount;
 }
 
 public sealed record CfdStatusDto(bool Enabled, string Mode, IReadOnlyList<string> Instruments,
@@ -340,13 +347,14 @@ public sealed class CfdPracticeAgent : BackgroundService
                 if (spreadPoints>_settings.MaxSpreadPoints[instrument]) continue;
                 var conversion=await _broker.CurrencyToAccountAsync(contract.QuoteCurrency,account.Currency,ct);
                 var stopDistance=signal.Atr*CfdRiskLimits.StopAtrMultiple;
-                var units=CfdRiskSizer.CalculateUnits(contract,account.Equity,stopDistance,quote.Ask,conversion,_settings.MaxRiskPerTrade);
+                var pointValue=_settings.QuoteCurrencyPerPointPerUnit[instrument];
+                var units=CfdRiskSizer.CalculateUnits(contract,account.Equity,stopDistance,pointValue,quote.Ask,conversion,_settings.MaxRiskPerTrade);
                 if (units<contract.MinimumUnits || units<=0) continue;
                 var entry=signal.Side==CfdSide.Buy?quote.Ask:quote.Bid;
                 var dir=signal.Side==CfdSide.Buy?1m:-1m;
                 var proposal=new CfdTradeProposal(Guid.NewGuid().ToString("N")[..8],instrument,signal.Side,units,
                     entry,entry-dir*stopDistance,entry+dir*stopDistance*CfdRiskLimits.RewardToRisk,
-                    stopDistance,Math.Round(CfdRiskSizer.MaxLoss(contract,units,stopDistance,conversion),2),account.Currency,
+                    stopDistance,Math.Round(CfdRiskSizer.MaxLoss(units,stopDistance,pointValue,conversion),2),account.Currency,
                     _time.GetUtcNow().UtcDateTime,$"{_strategy.Name}: {signal.Rationale}",contract.PricePrecision,contract.PipSize,contract.MarginRate);
                 _pending.TryAdd(proposal.Id,proposal);
             }
@@ -384,7 +392,8 @@ public sealed class CfdPracticeAgent : BackgroundService
             if (drift>_settings.MaxApprovalDriftPoints[p.Instrument])
                 return new(false,$"Price moved {drift:F2} points; wait for a new proposal.");
             var conversion=await _broker.CurrencyToAccountAsync(contract.QuoteCurrency,account.Currency,ct);
-            var byRiskAndMargin=CfdRiskSizer.CalculateUnits(contract,account.Equity,p.StopDistancePoints,
+            var pointValue=_settings.QuoteCurrencyPerPointPerUnit[p.Instrument];
+            var byRiskAndMargin=CfdRiskSizer.CalculateUnits(contract,account.Equity,p.StopDistancePoints,pointValue,
                 live,conversion,_settings.MaxRiskPerTrade);
             var units=Math.Min(p.Units,byRiskAndMargin);
             if (units<=0 || units<p.Units*0.95m) return new(false,"Account equity, margin or currency conversion changed; proposal needs recalculation.");
@@ -392,7 +401,7 @@ public sealed class CfdPracticeAgent : BackgroundService
             var distance=p.StopDistancePoints;
             var order=p with { Units=units,Entry=live,StopLoss=live-dir*distance,
                 TakeProfit=live+dir*distance*CfdRiskLimits.RewardToRisk,
-                MaxLoss=Math.Round(CfdRiskSizer.MaxLoss(contract,units,p.StopDistancePoints,conversion),2),PricePrecision=contract.PricePrecision };
+                MaxLoss=Math.Round(CfdRiskSizer.MaxLoss(units,p.StopDistancePoints,pointValue,conversion),2),PricePrecision=contract.PricePrecision };
             if (!_settings.TradingHours.IsOpen(_time.GetUtcNow().UtcDateTime)) return new(false,"CFD practice hours closed while checking the order.");
             var result=await _broker.PlacePracticeOrderAsync(order,ct);
             return new CfdDecisionResult(result.Filled,result.Message);

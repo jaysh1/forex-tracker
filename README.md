@@ -107,6 +107,7 @@ How it behaves:
 | `CFD_MAX_RISK_PER_TRADE` | Optional, default `50`; caps CFD per-trade risk and scales its separate daily loss/profit limits |
 | `CFD_MAX_SPREAD_POINTS_<INSTRUMENT>` | Required per enabled CFD; positive cap in the instrument's quoted price points, checked during scan and approval |
 | `CFD_MAX_APPROVAL_DRIFT_POINTS_<INSTRUMENT>` | Required per enabled CFD; positive maximum price movement in quoted points between proposal and approval |
+| `CFD_QUOTE_CURRENCY_PER_POINT_PER_UNIT_<INSTRUMENT>` | Required per enabled CFD; cash value of one quoted point for one unit, taken from the account's OANDA contract specification |
 | `CFD_GUARD_STATE_PATH` | Optional base path for the local CFD guard file; environment and account are appended for isolation |
 
 Never commit secrets. Use Codespaces secrets while developing and Render's environment settings in production.
