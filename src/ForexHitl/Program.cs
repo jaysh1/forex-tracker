@@ -21,7 +21,10 @@ else
     var cfdGuardPath = Environment.GetEnvironmentVariable("CFD_GUARD_STATE_PATH") ?? config.GuardStatePath + ".cfd";
     builder.Services.AddSingleton<ICfdRiskStateStore>(new CfdFileRiskStateStore($"{cfdGuardPath}.{cfdAccountScope}"));
 }
-builder.Services.AddSingleton<CfdRiskPersistence>();
+builder.Services.AddSingleton(sp => new CfdRiskPersistence(
+    sp.GetRequiredService<CfdDailyRiskGuard>(), sp.GetRequiredService<ICfdRiskStateStore>(),
+    sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<CfdRiskPersistence>>(),
+    message => sp.GetRequiredService<ActivityLog>().Add("error", message)));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(config.TradingHours);
 // The guard refuses to allow trading until its saved state has been loaded (see GuardPersistence).
@@ -62,7 +65,9 @@ builder.Services.AddHttpClient("cfd", c =>
 });
 builder.Services.AddTransient(sp => new CfdOandaClient(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient("cfd"), config.OandaAccountId));
+builder.Services.AddTransient<ICfdBroker>(sp => sp.GetRequiredService<CfdOandaClient>());
 builder.Services.AddHttpClient<INewsCalendar, HttpNewsCalendar>(c => c.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddSingleton<ICfdNewsCalendar, CfdNewsCalendarAdapter>();
 
 if (config.NtfyTopic is null)
     builder.Services.AddSingleton<IApprovalNotifier, NullNotifier>();
@@ -149,11 +154,11 @@ secured.MapGet("/cfd/state", (
     CfdPracticeAgent cfd, DashboardPresenter presenter, DecisionConfirmationStore confirmations, TimeProvider time) =>
     Results.Ok(presenter.Cfd(cfd.Snapshot(), confirmations, time.GetUtcNow().UtcDateTime)));
 secured.MapPost("/cfd/proposals/{id}/{action}", async (
-    string id, string action, CfdPracticeAgent cfd, DashboardPresenter presenter,
+    string id, string action, HttpRequest request, CfdPracticeAgent cfd, DashboardPresenter presenter,
     DecisionConfirmationStore confirmations, TimeProvider time, ILogger<Program> log) =>
 {
     if (action is not ("approve" or "reject")) return Results.BadRequest();
-    if (action == "approve" && !confirmations.TryConfirm("cfd", id, time.GetUtcNow().UtcDateTime))
+    if (action == "approve" && !confirmations.TryConfirm("cfd", id, request.Headers["X-Approval-Request-Id"].ToString(), time.GetUtcNow().UtcDateTime))
         return Results.Ok(new DashboardActionResult(true, false, true, "Tap approve again within 20 seconds to confirm."));
     if (action == "reject") confirmations.Clear("cfd", id);
     try { return Results.Ok(presenter.CfdAction(await cfd.DecideAsync(action, id, CancellationToken.None), action)); }
@@ -177,11 +182,11 @@ secured.MapGet("/state", (
 });
 
 secured.MapPost("/proposals/{id}/{action}", async (
-    string id, string action, ExecutionAgent execution, DashboardPresenter presenter,
+    string id, string action, HttpRequest request, ExecutionAgent execution, DashboardPresenter presenter,
     DecisionConfirmationStore confirmations, TimeProvider time, ILogger<Program> log) =>
 {
     if (action is not ("approve" or "reject")) return Results.BadRequest();
-    if (action == "approve" && !confirmations.TryConfirm("forex", id, time.GetUtcNow().UtcDateTime))
+    if (action == "approve" && !confirmations.TryConfirm("forex", id, request.Headers["X-Approval-Request-Id"].ToString(), time.GetUtcNow().UtcDateTime))
         return Results.Ok(new DashboardActionResult(true, false, true, "Tap approve again within 20 seconds to confirm."));
     if (action == "reject") confirmations.Clear("forex", id);
     try

@@ -38,9 +38,3 @@ services:
         value: Australia/Melbourne
       - key: MAX_RISK_PER_TRADE
         value: "50"
-      - key: CFD_INSTRUMENTS
-        value: AU200_AUD,SPX500_USD
-      - key: CFD_MAX_RISK_PER_TRADE
-        value: "50"
-      - key: CFD_TRADING_HOURS
-        value: always

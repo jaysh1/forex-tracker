@@ -20,7 +20,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/ForexHitl/ForexHitl.csproj" />
     <ProjectReference Include="../../src/CFDEngine/CFDEngine.csproj" />
-    <ProjectReference Include="../../src/StockEngine/StockEngine.csproj" />
   </ItemGroup>
 
 </Project>

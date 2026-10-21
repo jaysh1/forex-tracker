@@ -4,6 +4,7 @@ data/
 client-out/
 node_modules/
 src/ForexHitl/wwwroot/
+src/ForexHitl.Web/dist/
 .env
 *.user
 .vs/

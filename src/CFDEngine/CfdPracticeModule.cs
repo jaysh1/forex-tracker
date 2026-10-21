@@ -6,7 +6,8 @@ using System.Text.Json;
 namespace CFDEngine;
 
 /// <summary>CFD-specific settings and risk parameters. Deliberately separate from Forex AppConfig.</summary>
-public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWindow TradingHours, decimal MaxRiskPerTrade)
+public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWindow TradingHours, decimal MaxRiskPerTrade,
+    IReadOnlyDictionary<string, decimal> MaxSpreadPoints, IReadOnlyDictionary<string, decimal> MaxApprovalDriftPoints)
 {
     public bool Enabled => Instruments.Count > 0;
 
@@ -22,13 +23,29 @@ public sealed record CfdSettings(IReadOnlyList<string> Instruments, CfdTradingWi
         if (forexLive && instruments.Length > 0)
             throw new InvalidOperationException("CFD practice trading is disabled on live accounts.");
 
+        var spreadCaps = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        var driftCaps = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        foreach (var instrument in instruments)
+        {
+            var key = $"CFD_MAX_SPREAD_POINTS_{instrument}";
+            var raw = get(key);
+            if (!decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var cap) || cap <= 0)
+                throw new InvalidOperationException($"{key} must be set to a positive price-point limit before enabling {instrument}.");
+            spreadCaps[instrument] = cap;
+            var driftKey = $"CFD_MAX_APPROVAL_DRIFT_POINTS_{instrument}";
+            var rawDrift = get(driftKey);
+            if (!decimal.TryParse(rawDrift, NumberStyles.Number, CultureInfo.InvariantCulture, out var drift) || drift <= 0)
+                throw new InvalidOperationException($"{driftKey} must be set to a positive price-point limit before enabling {instrument}.");
+            driftCaps[instrument] = drift;
+        }
+
         var rawRisk = get("CFD_MAX_RISK_PER_TRADE");
         var risk = string.IsNullOrWhiteSpace(rawRisk) ? CfdRiskLimits.DefaultMaxRiskPerTrade :
             decimal.TryParse(rawRisk, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
                 ? parsed : throw new InvalidOperationException("CFD_MAX_RISK_PER_TRADE must be positive.");
         var hours = CfdTradingWindow.Parse(get("CFD_TRADING_HOURS") ?? "always",
             get("CFD_TRADING_DAYS") ?? "Mon-Fri", get("CFD_TRADING_TIMEZONE"));
-        return new CfdSettings(instruments, hours, risk);
+        return new CfdSettings(instruments, hours, risk, spreadCaps, driftCaps);
     }
 }
 
@@ -45,30 +62,28 @@ public static class CfdRiskLimits
     public static readonly TimeSpan DrawdownLockout = TimeSpan.FromHours(24);
     public const decimal DefaultMaxRiskPerTrade = 50m;
     public const decimal MaxLeverage = 10m;
-    public const decimal MinimumStopPips = 8m;
-    public const decimal MaximumStopPips = 40m;
     public const decimal StopAtrMultiple = 1.5m;
     public const decimal RewardToRisk = 2m;
 }
 
 public static class CfdRiskSizer
 {
-    public static long CalculateUnits(CfdContract contract, decimal equity, decimal stopLossPips,
+    public static long CalculateUnits(CfdContract contract, decimal equity, decimal stopDistancePoints,
         decimal entryPrice, decimal quoteToAccount, decimal maxRiskPerTrade)
     {
-        if (equity <= 0 || stopLossPips <= 0 || entryPrice <= 0 || quoteToAccount <= 0 ||
+        if (equity <= 0 || stopDistancePoints <= 0 || entryPrice <= 0 || quoteToAccount <= 0 ||
             contract.PipSize <= 0 || contract.MarginRate <= 0 || maxRiskPerTrade <= 0)
             throw new ArgumentException("CFD equity, stop, price, conversion, margin, and risk cap must be positive.");
         var budget = Math.Min(equity * CfdRiskLimits.RiskPerTradePercent / 100m, maxRiskPerTrade);
-        var byRisk = Math.Floor(budget / (stopLossPips * contract.PipSize * quoteToAccount));
+        var byRisk = Math.Floor(budget / (stopDistancePoints * quoteToAccount));
         var maxLeverage = Math.Min(CfdRiskLimits.MaxLeverage, 1m / contract.MarginRate);
         var byMargin = Math.Floor(equity * maxLeverage / (entryPrice * quoteToAccount));
         var units = Math.Min(Math.Min(byRisk, byMargin), contract.MaximumUnits);
         return units < contract.MinimumUnits || units > long.MaxValue ? 0 : (long)units;
     }
 
-    public static decimal MaxLoss(CfdContract contract, long units, decimal stopLossPips, decimal quoteToAccount) =>
-        units * stopLossPips * contract.PipSize * quoteToAccount;
+    public static decimal MaxLoss(CfdContract contract, long units, decimal stopDistancePoints, decimal quoteToAccount) =>
+        units * stopDistancePoints * quoteToAccount;
 }
 
 public sealed record CfdStatusDto(bool Enabled, string Mode, IReadOnlyList<string> Instruments,
@@ -142,7 +157,9 @@ public sealed class CfdOandaClient : ICfdBroker
         if (name != instrument) throw new CfdBrokerException($"OANDA returned unexpected contract {name} for {instrument}.");
         var marginRate = Dec(i, "marginRate");
         var minUnits = Dec(i, "minimumTradeSize");
-        var maxUnits = i.TryGetProperty("maximumOrderUnits", out var max) ? Dec(i, "maximumOrderUnits") : long.MaxValue;
+        var maxOrderUnits = i.TryGetProperty("maximumOrderUnits", out _) ? Dec(i, "maximumOrderUnits") : long.MaxValue;
+        var maxPositionUnits = i.TryGetProperty("maximumPositionSize", out _) ? Dec(i, "maximumPositionSize") : long.MaxValue;
+        var maxUnits = Math.Min(maxOrderUnits, maxPositionUnits);
         if (marginRate <= 0 || minUnits <= 0) throw new CfdBrokerException($"OANDA returned invalid margin or minimum size for {instrument}.");
         var contract = new CfdContract(name, i.GetProperty("displayPrecision").GetInt32(), precision,
             (decimal)Math.Pow(10, i.GetProperty("pipLocation").GetInt32()),
@@ -249,7 +266,8 @@ public sealed class CfdPracticeAgent : BackgroundService
 {
     private static readonly TimeSpan ProposalLifetime = TimeSpan.FromMinutes(5);
     private readonly CfdSettings _settings;
-    private readonly CfdOandaClient _broker;
+    private readonly ICfdBroker _broker;
+    private readonly ICfdNewsCalendar _news;
     private readonly ICfdStrategy _strategy;
     private readonly CfdDailyRiskGuard _guard;
     private readonly CfdRiskPersistence _persistence;
@@ -263,9 +281,11 @@ public sealed class CfdPracticeAgent : BackgroundService
     private string? _currency, _reason;
     private bool _canTrade;
 
-    public CfdPracticeAgent(CfdSettings settings, CfdOandaClient broker, ICfdStrategy strategy,
+    public CfdPracticeAgent(CfdSettings settings, ICfdBroker broker, ICfdNewsCalendar news, ICfdStrategy strategy,
         CfdDailyRiskGuard guard, CfdRiskPersistence persistence, TimeProvider time, ILogger<CfdPracticeAgent> log)
-    { _settings=settings; _broker=broker; _strategy=strategy; _guard=guard; _persistence=persistence; _time=time; _log=log; }
+    { _settings=settings; _broker=broker; _news=news; _strategy=strategy; _guard=guard; _persistence=persistence; _time=time; _log=log; }
+
+    internal void QueueProposal(CfdTradeProposal proposal) => _pending[proposal.Id] = proposal;
 
     public CfdStatusDto Snapshot() => new(_settings.Enabled, "practice", _settings.Instruments, _updated,
         _equity, _currency, _dayPnl, _canTrade && _settings.Enabled, _reason, _settings.TradingHours.Describe(),
@@ -293,7 +313,8 @@ public sealed class CfdPracticeAgent : BackgroundService
         var status = _guard.Evaluate(account.Equity, _time.GetUtcNow().UtcDateTime);
         await _persistence.FlushAsync(ct);
         _equity=account.Equity; _currency=account.Currency; _dayPnl=status.DayPnl; _canTrade=status.CanTrade;
-        _reason=status.Reason; _updated=_time.GetUtcNow().UtcDateTime;
+        _reason=status.CanTrade ? null : _persistence.LastProblem ?? status.Reason;
+        _updated=_time.GetUtcNow().UtcDateTime;
         foreach (var p in _pending.Values.Where(p=>_time.GetUtcNow().UtcDateTime-p.CreatedUtc>ProposalLifetime)) _pending.TryRemove(p.Id,out _);
         if (!status.CanTrade || !_settings.TradingHours.IsOpen(_time.GetUtcNow().UtcDateTime)) return;
         foreach (var instrument in _settings.Instruments)
@@ -311,21 +332,21 @@ public sealed class CfdPracticeAgent : BackgroundService
                 var signal=_strategy.Evaluate(m5,m15);
                 if (signal is null) continue;
                 var contract=await _broker.GetContractAsync(instrument,ct);
+                var newsBlock=await NewsBlockAsync(contract.QuoteCurrency, _time.GetUtcNow().UtcDateTime, ct);
+                if (newsBlock is not null) { _reason=newsBlock; continue; }
                 var quote=await _broker.GetQuoteAsync(instrument,ct);
                 if (!quote.Tradeable || quote.Bid<=0 || quote.Ask<=0) continue;
-                var spread=(quote.Ask-quote.Bid)/contract.PipSize;
-                if (spread>(contract.Name=="AU200_AUD"?2m:3m)) continue;
+                var spreadPoints=quote.Ask-quote.Bid;
+                if (spreadPoints>_settings.MaxSpreadPoints[instrument]) continue;
                 var conversion=await _broker.CurrencyToAccountAsync(contract.QuoteCurrency,account.Currency,ct);
-                var stopDistance=Math.Clamp(signal.Atr*CfdRiskLimits.StopAtrMultiple,
-                    CfdRiskLimits.MinimumStopPips*contract.PipSize,CfdRiskLimits.MaximumStopPips*contract.PipSize);
-                var stopPips=stopDistance/contract.PipSize;
-                var units=CfdRiskSizer.CalculateUnits(contract,account.Equity,stopPips,quote.Ask,conversion,_settings.MaxRiskPerTrade);
+                var stopDistance=signal.Atr*CfdRiskLimits.StopAtrMultiple;
+                var units=CfdRiskSizer.CalculateUnits(contract,account.Equity,stopDistance,quote.Ask,conversion,_settings.MaxRiskPerTrade);
                 if (units<contract.MinimumUnits || units<=0) continue;
                 var entry=signal.Side==CfdSide.Buy?quote.Ask:quote.Bid;
                 var dir=signal.Side==CfdSide.Buy?1m:-1m;
                 var proposal=new CfdTradeProposal(Guid.NewGuid().ToString("N")[..8],instrument,signal.Side,units,
                     entry,entry-dir*stopDistance,entry+dir*stopDistance*CfdRiskLimits.RewardToRisk,
-                    stopPips,Math.Round(CfdRiskSizer.MaxLoss(contract,units,stopPips,conversion),2),account.Currency,
+                    stopDistance,Math.Round(CfdRiskSizer.MaxLoss(contract,units,stopDistance,conversion),2),account.Currency,
                     _time.GetUtcNow().UtcDateTime,$"{_strategy.Name}: {signal.Rationale}",contract.PricePrecision,contract.PipSize,contract.MarginRate);
                 _pending.TryAdd(proposal.Id,proposal);
             }
@@ -351,25 +372,41 @@ public sealed class CfdPracticeAgent : BackgroundService
             if (!guard.CanTrade) return new(false,$"Trading locked: {guard.Reason}");
             if (await _broker.HasOpenPositionAsync(p.Instrument,ct)) return new(false,"A position in this CFD is already open.");
             var contract=await _broker.GetContractAsync(p.Instrument,ct);
+            var newsBlock=await NewsBlockAsync(contract.QuoteCurrency, now, ct);
+            if (newsBlock is not null) return new(false,newsBlock);
             var quote=await _broker.GetQuoteAsync(p.Instrument,ct);
-            if (!quote.Tradeable) return new(false,"CFD market is closed.");
+            if (!quote.Tradeable || quote.Bid<=0 || quote.Ask<=0) return new(false,"CFD market is closed or has no valid price.");
+            var liveSpread=quote.Ask-quote.Bid;
+            if (liveSpread>_settings.MaxSpreadPoints[p.Instrument])
+                return new(false,$"Spread widened to {liveSpread:F2} points; limit is {_settings.MaxSpreadPoints[p.Instrument]:F2}. Wait for a new proposal.");
             var live=p.Side==CfdSide.Buy?quote.Ask:quote.Bid;
-            var drift=Math.Abs(live-p.Entry)/contract.PipSize;
-            if (drift>2m) return new(false,$"Price moved {drift:F1} points; wait for a new proposal.");
+            var drift=Math.Abs(live-p.Entry);
+            if (drift>_settings.MaxApprovalDriftPoints[p.Instrument])
+                return new(false,$"Price moved {drift:F2} points; wait for a new proposal.");
             var conversion=await _broker.CurrencyToAccountAsync(contract.QuoteCurrency,account.Currency,ct);
             var byRiskAndMargin=CfdRiskSizer.CalculateUnits(contract,account.Equity,p.StopDistancePoints,
                 live,conversion,_settings.MaxRiskPerTrade);
             var units=Math.Min(p.Units,byRiskAndMargin);
             if (units<=0 || units<p.Units*0.95m) return new(false,"Account equity, margin or currency conversion changed; proposal needs recalculation.");
             var dir=p.Side==CfdSide.Buy?1m:-1m;
-            var distance=p.StopDistancePoints*contract.PipSize;
+            var distance=p.StopDistancePoints;
             var order=p with { Units=units,Entry=live,StopLoss=live-dir*distance,
                 TakeProfit=live+dir*distance*CfdRiskLimits.RewardToRisk,
                 MaxLoss=Math.Round(CfdRiskSizer.MaxLoss(contract,units,p.StopDistancePoints,conversion),2),PricePrecision=contract.PricePrecision };
             if (!_settings.TradingHours.IsOpen(_time.GetUtcNow().UtcDateTime)) return new(false,"CFD practice hours closed while checking the order.");
-            var result=await _broker.PlaceMarketOrderAsync(order,ct);
+            var result=await _broker.PlacePracticeOrderAsync(order,ct);
             return new CfdDecisionResult(result.Filled,result.Message);
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<string?> NewsBlockAsync(string currency, DateTime nowUtc, CancellationToken ct)
+    {
+        var events=await _news.GetEventsAsync(ct);
+        if (events is null) return "Economic calendar unavailable; CFD approval is paused.";
+        var blocked=events.FirstOrDefault(e=>e.Currency.Equals(currency,StringComparison.OrdinalIgnoreCase) &&
+            e.Impact.Equals("High",StringComparison.OrdinalIgnoreCase) &&
+            (nowUtc-e.TimeUtc).Duration()<=TimeSpan.FromMinutes(30));
+        return blocked is null ? null : $"News blackout: {blocked.Currency} {blocked.Title} at {blocked.TimeUtc:HH:mm} UTC.";
     }
 }

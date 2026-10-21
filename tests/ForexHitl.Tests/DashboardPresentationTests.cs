@@ -12,7 +12,7 @@ public class DashboardPresentationTests
         var presenter = new DashboardPresenter();
         var hours = TradingWindow.Parse("09:00-17:00", "Mon-Fri", "Australia/Melbourne");
         var confirmations = new DecisionConfirmationStore();
-        Assert.False(confirmations.TryConfirm("forex", "p1", now));
+        Assert.False(confirmations.TryConfirm("forex", "p1", "request-1", now));
 
         var model = presenter.Forex(false,
             new StatusSnapshot(now, 100_000m, "AUD", 25.5m, true, null), hours, now,
@@ -60,9 +60,11 @@ public class DecisionConfirmationStoreTests
         var store = new DecisionConfirmationStore();
         var now = DateTime.UtcNow;
 
-        Assert.False(store.TryConfirm("forex", "p1", now));
+        Assert.False(store.TryConfirm("forex", "p1", "request-1", now));
         Assert.True(store.IsArmed("forex", "p1", now.AddSeconds(1)));
-        Assert.False(store.TryConfirm("forex", "p1", now.AddSeconds(20)));
-        Assert.True(store.TryConfirm("forex", "p1", now.AddSeconds(21)));
+        Assert.False(store.TryConfirm("forex", "p1", "request-1", now.AddSeconds(1)));
+        Assert.False(store.TryConfirm("forex", "p1", "request-2", now.AddMilliseconds(500)));
+        Assert.False(store.TryConfirm("forex", "p1", "request-3", now.AddSeconds(20)));
+        Assert.True(store.TryConfirm("forex", "p1", "request-4", now.AddSeconds(21)));
     }
 }

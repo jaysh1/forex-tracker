@@ -39,7 +39,10 @@ public sealed record DashboardActionResult(bool Succeeded, bool Executed, bool N
 public sealed class DashboardPresenter
 {
     private static readonly CultureInfo DisplayCulture = CultureInfo.InvariantCulture;
-    private readonly TimeZoneInfo _displayZone = TimeZoneInfo.FindSystemTimeZoneById("Australia/Melbourne");
+    private readonly TimeZoneInfo _displayZone;
+
+    public DashboardPresenter(TradingWindow? tradingWindow = null) =>
+        _displayZone = tradingWindow?.Zone ?? TimeZoneInfo.Utc;
 
     public ForexDashboardDto Forex(
         bool live, StatusSnapshot? status, TradingWindow hours, DateTime nowUtc,

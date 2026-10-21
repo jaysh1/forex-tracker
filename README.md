@@ -105,6 +105,8 @@ How it behaves:
 | `GUARD_STATE_PATH` | Optional, used only without Supabase. Default `data/guard-state.json` (the Docker image sets `/app/data/guard-state.json`) |
 | `CFD_INSTRUMENTS` | Optional, empty by default; currently supports `AU200_AUD,SPX500_USD` |
 | `CFD_MAX_RISK_PER_TRADE` | Optional, default `50`; caps CFD per-trade risk and scales its separate daily loss/profit limits |
+| `CFD_MAX_SPREAD_POINTS_<INSTRUMENT>` | Required per enabled CFD; positive cap in the instrument's quoted price points, checked during scan and approval |
+| `CFD_MAX_APPROVAL_DRIFT_POINTS_<INSTRUMENT>` | Required per enabled CFD; positive maximum price movement in quoted points between proposal and approval |
 | `CFD_GUARD_STATE_PATH` | Optional base path for the local CFD guard file; environment and account are appended for isolation |
 
 Never commit secrets. Use Codespaces secrets while developing and Render's environment settings in production.

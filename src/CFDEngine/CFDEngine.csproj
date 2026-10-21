@@ -10,4 +10,7 @@
     <Using Include="Microsoft.Extensions.Hosting" />
     <Using Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ForexHitl.Tests" />
+  </ItemGroup>
 </Project>

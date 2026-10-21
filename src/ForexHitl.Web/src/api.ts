@@ -60,9 +60,9 @@ export async function login(password: string): Promise<string | null> {
 export const getForexState = () => request<ForexDashboardDto>('/api/state')
 export const getCfdState = () => request<CfdDashboardDto>('/api/cfd/state')
 export const decideForex = (id: string, action: 'approve' | 'reject') =>
-  request<DashboardActionResult>(`/api/proposals/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
+  request<DashboardActionResult>(`/api/proposals/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: action === 'approve' ? { 'X-Approval-Request-Id': crypto.randomUUID() } : undefined })
 export const decideCfd = (id: string, action: 'approve' | 'reject') =>
-  request<DashboardActionResult>(`/api/cfd/proposals/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
+  request<DashboardActionResult>(`/api/cfd/proposals/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: action === 'approve' ? { 'X-Approval-Request-Id': crypto.randomUUID() } : undefined })
 
 export async function logout(): Promise<void> {
   try {

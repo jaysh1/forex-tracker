@@ -167,12 +167,14 @@ public sealed class CfdDailyRiskGuard
 }
 
 public sealed class CfdRiskPersistence(
-    CfdDailyRiskGuard guard, ICfdRiskStateStore store, TimeProvider time, ILogger<CfdRiskPersistence> log)
+    CfdDailyRiskGuard guard, ICfdRiskStateStore store, TimeProvider time, ILogger<CfdRiskPersistence> log,
+    Action<string>? problemReported = null)
 {
     private readonly SemaphoreSlim _lock = new(1, 1);
     private static readonly TimeSpan RepeatProblemAfter = TimeSpan.FromMinutes(10);
     private string? _lastProblem;
     private DateTime _lastProblemAtUtc = DateTime.MinValue;
+    public string? LastProblem => _lastProblem;
 
     public async Task EnsureLoadedAsync(CancellationToken ct)
     {
@@ -243,6 +245,7 @@ public sealed class CfdRiskPersistence(
         _lastProblem = message;
         _lastProblemAtUtc = now;
         log.LogWarning("{Message}", message);
+        problemReported?.Invoke(message);
     }
 }
 

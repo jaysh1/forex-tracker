@@ -32,6 +32,7 @@ public sealed class TradingWindow
     public static TradingWindow Always { get; } = new(null, TimeOnly.MinValue, TimeOnly.MaxValue, new HashSet<DayOfWeek>());
 
     public bool Unrestricted => _zone is null;
+    public TimeZoneInfo? Zone => _zone;
 
     public bool IsOpen(DateTime utcNow)
     {
