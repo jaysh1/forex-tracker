@@ -50,8 +50,8 @@ take profit at OANDA, which work around the clock. Reject always works. Change t
 
 ## Saving state to Supabase
 
-Two things are saved so they survive restarts and redeploys: the **risk guard state** (the day's starting equity and
-any drawdown/profit lockout) and the **recent activity feed**. Pending proposals (they expire in 5 minutes) and
+The Forex and CFD **risk guard states** (each day's starting equity and any drawdown/profit lockout) and the **recent
+activity feed** are saved so they survive restarts and redeploys. Pending proposals (they expire in 5 minutes) and
 sign-in sessions (a restart signs you out) deliberately stay in memory.
 
 1. Create a project at supabase.com. In the dashboard open **SQL Editor** and run `supabase/schema.sql` (also below).
@@ -78,9 +78,10 @@ How it behaves:
 - **Keeps going on save failure.** If a save fails, trading continues on the in-memory state and the save is retried
   on every tick; Activity reports it (a restart during that time could lose the newest change).
 - The risk state is saved the moment it changes; the activity feed is saved every 10 seconds, and both once more on shutdown.
-- Without `SUPABASE_URL`, state goes to a local file (`GUARD_STATE_PATH`), which only survives restarts on a
-  persistent disk. With Supabase you do **not** need a disk, so a free Render instance no longer loses the daily-loss state.
-- Rows are keyed by environment and account (`practice:<account id>:guard`), so switching between practice and live, or between accounts, never loads another one's baseline or lockout.
+- Without `SUPABASE_URL`, Forex state goes to `GUARD_STATE_PATH` and CFD state goes to an account-specific file based
+  on `CFD_GUARD_STATE_PATH` (or `GUARD_STATE_PATH` with a `.cfd` suffix). Local files only survive restarts on a
+  persistent disk. With Supabase you do **not** need a disk, so a free Render instance no longer loses guard state.
+- Rows are keyed by environment, account, and engine: Forex uses `practice:<account id>:guard`, while CFD uses `practice:<account id>:cfd_guard`. Switching accounts or engines cannot load another guard's baseline or lockout.
 - A saved risk state that does not make sense (zero baseline, bad session time, a lock with no reason) is treated like an unreadable one: trading stays paused.
 - For local development against the Supabase CLI's stack, `http://127.0.0.1:54321` is accepted; every other URL must be https.
 
@@ -102,6 +103,9 @@ How it behaves:
 | `TRADING_TIMEZONE` | Optional, default `Australia/Melbourne` (IANA name) |
 | `MAX_RISK_PER_TRADE` | Optional, default `50`; hard per-trade cap in the account's currency, in addition to the 0.5% NAV limit |
 | `GUARD_STATE_PATH` | Optional, used only without Supabase. Default `data/guard-state.json` (the Docker image sets `/app/data/guard-state.json`) |
+| `CFD_INSTRUMENTS` | Optional, empty by default; currently supports `AU200_AUD,SPX500_USD` |
+| `CFD_MAX_RISK_PER_TRADE` | Optional, default `50`; caps CFD per-trade risk and scales its separate daily loss/profit limits |
+| `CFD_GUARD_STATE_PATH` | Optional base path for the local CFD guard file; environment and account are appended for isolation |
 
 Never commit secrets. Use Codespaces secrets while developing and Render's environment settings in production.
 

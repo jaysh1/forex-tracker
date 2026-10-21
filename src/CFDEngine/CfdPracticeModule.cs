@@ -40,6 +40,9 @@ public sealed record CfdTradeProposal(string Id, string Instrument, CfdSide Side
 public static class CfdRiskLimits
 {
     public const decimal RiskPerTradePercent = 0.5m;
+    public const decimal DailyDrawdownPercent = 1.5m;
+    public const decimal DailyProfitTargetPercent = 1m;
+    public static readonly TimeSpan DrawdownLockout = TimeSpan.FromHours(24);
     public const decimal DefaultMaxRiskPerTrade = 50m;
     public const decimal MaxLeverage = 10m;
     public const decimal MinimumStopPips = 8m;

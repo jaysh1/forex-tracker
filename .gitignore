@@ -8,5 +8,5 @@ src/ForexHitl/wwwroot/
 *.user
 .vs/
 
-# local secrets (launchSettings holds your OANDA token and password)
+# local launch profiles can contain secrets
 **/Properties/launchSettings.json

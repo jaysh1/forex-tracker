@@ -71,6 +71,116 @@ public sealed class CfdRiskSizerTests
     }
 }
 
+public sealed class CfdDailyRiskGuardTests
+{
+    private static readonly DateTime SessionStart = new(2026, 10, 20, 22, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void DailyLimitsUseTheCapitalImpliedByTheCfdRiskCap()
+    {
+        var guard = new CfdDailyRiskGuard(maxRiskPerTrade: 50m, awaitingRestore: false);
+        guard.Evaluate(100_000m, SessionStart);
+
+        var status = guard.Evaluate(99_849m, SessionStart.AddMinutes(10));
+
+        Assert.False(status.CanTrade);
+        Assert.True(status.NewlyLocked);
+        Assert.Contains("limit -150.00", status.Reason);
+        Assert.Equal(-151m, status.DayPnl);
+    }
+
+    [Fact]
+    public void DailyProfitLimitIsAlsoCappedByTheCfdRiskCap()
+    {
+        var guard = new CfdDailyRiskGuard(maxRiskPerTrade: 50m, awaitingRestore: false);
+        guard.Evaluate(100_000m, SessionStart);
+
+        var status = guard.Evaluate(100_101m, SessionStart.AddMinutes(10));
+
+        Assert.False(status.CanTrade);
+        Assert.True(status.NewlyLocked);
+        Assert.Contains("target +100.00", status.Reason);
+        Assert.Equal(101m, status.DayPnl);
+    }
+
+    [Fact]
+    public async Task PersistenceRestoresStateBeforeAllowingTradingAndRetriesSaveFailures()
+    {
+        var store = new MemoryCfdRiskStateStore();
+        var first = new CfdDailyRiskGuard(awaitingRestore: true);
+        var persistence = new CfdRiskPersistence(first, store, TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CfdRiskPersistence>.Instance);
+        Assert.False(first.Evaluate(10_000m, SessionStart).CanTrade);
+
+        await persistence.EnsureLoadedAsync(CancellationToken.None);
+        Assert.True(first.Ready);
+        first.Evaluate(10_000m, SessionStart);
+        await persistence.FlushAsync(CancellationToken.None);
+        Assert.NotNull(store.Json);
+
+        store.ThrowOnSave = true;
+        first.Evaluate(9_849m, SessionStart.AddMinutes(1));
+        await persistence.FlushAsync(CancellationToken.None);
+        store.ThrowOnSave = false;
+        await persistence.FlushAsync(CancellationToken.None);
+
+        Assert.Contains("LockedUntilUtc", store.Json);
+        var restored = new CfdDailyRiskGuard(awaitingRestore: true);
+        var restore = new CfdRiskPersistence(restored, store, TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CfdRiskPersistence>.Instance);
+        await restore.EnsureLoadedAsync(CancellationToken.None);
+        Assert.False(restored.Evaluate(9_849m, SessionStart.AddMinutes(2)).CanTrade);
+    }
+
+    private sealed class MemoryCfdRiskStateStore : ICfdRiskStateStore
+    {
+        public string Name => "test store";
+        public string? Json { get; private set; }
+        public bool ThrowOnSave { get; set; }
+        public Task<string?> LoadAsync(CancellationToken ct) => Task.FromResult(Json);
+        public Task SaveAsync(string json, CancellationToken ct)
+        {
+            if (ThrowOnSave) throw new IOException("simulated save failure");
+            Json = json;
+            return Task.CompletedTask;
+        }
+    }
+}
+
+public sealed class CfdRiskStateStoreScopeTests
+{
+    [Fact]
+    public async Task SupabaseStoreAdapterKeepsCfdGuardRowsScopedToEnvironmentAndAccount()
+    {
+        var backing = new MemoryStateStore();
+        var practiceAccountA = new CfdRiskStateStoreAdapter(
+            new ScopedStateStore(backing, "practice:account-a:"), "cfd_guard");
+        var practiceAccountB = new CfdRiskStateStoreAdapter(
+            new ScopedStateStore(backing, "practice:account-b:"), "cfd_guard");
+
+        await practiceAccountA.SaveAsync("{\"StartEquity\":10000}", CancellationToken.None);
+        await practiceAccountB.SaveAsync("{\"StartEquity\":20000}", CancellationToken.None);
+
+        Assert.Equal("{\"StartEquity\":10000}", await practiceAccountA.LoadAsync(CancellationToken.None));
+        Assert.Equal("{\"StartEquity\":20000}", await practiceAccountB.LoadAsync(CancellationToken.None));
+        Assert.Contains("practice:account-a:cfd_guard", backing.Values.Keys);
+        Assert.Contains("practice:account-b:cfd_guard", backing.Values.Keys);
+    }
+
+    private sealed class MemoryStateStore : IStateStore
+    {
+        public string Name => "memory";
+        public Dictionary<string, string> Values { get; } = new(StringComparer.Ordinal);
+        public Task<string?> LoadAsync(string key, CancellationToken ct) =>
+            Task.FromResult(Values.GetValueOrDefault(key));
+        public Task SaveAsync(string key, string json, CancellationToken ct)
+        {
+            Values[key] = json;
+            return Task.CompletedTask;
+        }
+    }
+}
+
 public sealed class CfdOandaClientTests
 {
     [Fact]

@@ -9,10 +9,19 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(cfdSettings);
-builder.Services.AddSingleton<CfdDailyRiskGuard>();
-builder.Services.AddSingleton(sp => new CfdRiskPersistence(
-    sp.GetRequiredService<CfdDailyRiskGuard>(),
-    Environment.GetEnvironmentVariable("CFD_GUARD_STATE_PATH") ?? config.GuardStatePath + ".cfd"));
+builder.Services.AddSingleton(sp => new CfdDailyRiskGuard(
+    maxRiskPerTrade: cfdSettings.MaxRiskPerTrade, awaitingRestore: true));
+var cfdAccountScope = $"{(config.UseLive ? "live" : "practice")}_{config.OandaAccountId.Replace('-', '_')}";
+if (config.SupabaseUrl is not null)
+    // The configured IStateStore is already scoped by environment and account.
+    builder.Services.AddSingleton<ICfdRiskStateStore>(sp => new CfdRiskStateStoreAdapter(
+        sp.GetRequiredService<IStateStore>(), "cfd_guard"));
+else
+{
+    var cfdGuardPath = Environment.GetEnvironmentVariable("CFD_GUARD_STATE_PATH") ?? config.GuardStatePath + ".cfd";
+    builder.Services.AddSingleton<ICfdRiskStateStore>(new CfdFileRiskStateStore($"{cfdGuardPath}.{cfdAccountScope}"));
+}
+builder.Services.AddSingleton<CfdRiskPersistence>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(config.TradingHours);
 // The guard refuses to allow trading until its saved state has been loaded (see GuardPersistence).

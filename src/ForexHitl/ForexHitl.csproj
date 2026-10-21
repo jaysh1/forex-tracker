@@ -12,6 +12,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="DashboardPresentation.cs" />
+    <Compile Include="CfdRiskStateStoreAdapter.cs" />
     <ProjectReference Include="../ForexEngine/ForexEngine.csproj" />
     <ProjectReference Include="../CFDEngine/CFDEngine.csproj" />
     <ProjectReference Include="../StockEngine/StockEngine.csproj" />

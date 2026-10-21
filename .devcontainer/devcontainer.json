@@ -1,9 +1,13 @@
 {
-  "name": "Forex HITL (.NET 8)",
-  "image": "mcr.microsoft.com/devcontainers/dotnet:1-8.0",
-  "forwardPorts": [5000],
+  "name": "Forex HITL (.NET 10 + Vue)",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:2-10.0-noble",
+  "features": {
+    "ghcr.io/devcontainers/features/node:2": { "version": "22" }
+  },
+  "forwardPorts": [5000, 5173],
   "portsAttributes": {
-    "5000": { "label": "Approval page", "onAutoForward": "notify" }
+    "5000": { "label": "API server", "onAutoForward": "notify" },
+    "5173": { "label": "Vue dashboard", "onAutoForward": "openBrowser" }
   },
   "containerEnv": {
     "ASPNETCORE_URLS": "http://0.0.0.0:5000"
