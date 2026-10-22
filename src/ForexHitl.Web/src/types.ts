@@ -39,6 +39,17 @@ export interface MarketCheckView {
   explanation: string
   priceTimeText: string
   reasonUpdatedText: string
+  indicators: IndicatorChartView | null
+}
+
+export interface IndicatorChartView {
+  ema50: Array<number | null>
+  ema200: Array<number | null>
+  rsi: Array<number | null>
+  ema50Text: string
+  ema200Text: string
+  rsiText: string
+  updatedText: string
 }
 
 export interface ForexProposalView {

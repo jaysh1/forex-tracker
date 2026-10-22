@@ -111,6 +111,22 @@ public class SignalEngineTests
         Assert.Contains("15-minute history", evaluation.Explanation);
         Assert.Contains("200 candles", evaluation.Explanation);
     }
+
+    [Fact]
+    public void IndicatorSeries_ReturnsRecentServerCalculatedEmaAndRsiPoints()
+    {
+        var m5 = Trend(1.0m, 0.0001m, 150);
+        var m15 = Trend(1.0m, 0.0002m, 500);
+
+        var series = SignalEngine.BuildIndicatorSeries(m5, m15);
+
+        Assert.NotNull(series);
+        Assert.Equal(48, series!.Ema50.Length);
+        Assert.Equal(48, series.Ema200.Length);
+        Assert.Equal(48, series.Rsi.Length);
+        Assert.True(series.Ema50[^1] > series.Ema200[^1]);
+        Assert.Equal(100m, series.Rsi[^1]);
+    }
 }
 
 public class NewsWindowTests

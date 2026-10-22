@@ -3,7 +3,10 @@ namespace ForexHitl;
 /// <summary>Latest quote and entry-check explanation for each Forex instrument.</summary>
 public sealed record InstrumentScanDto(
     string Instrument, decimal? Bid, decimal? Ask, bool? Tradeable,
-    DateTime? PriceTimeUtc, DateTime? ReasonUpdatedUtc, string Explanation);
+    DateTime? PriceTimeUtc, DateTime? ReasonUpdatedUtc, string Explanation,
+    InstrumentIndicatorSnapshot? Indicators = null);
+
+public sealed record InstrumentIndicatorSnapshot(IndicatorSeriesSnapshot Series, DateTime UpdatedUtc);
 
 /// <summary>Thread-safe, in-memory snapshot shared by the Forex scanner and authenticated dashboard API.</summary>
 public sealed class ScanStatusStore
@@ -19,7 +22,7 @@ public sealed class ScanStatusStore
             var explanation = current?.Explanation ?? "Waiting for the first completed 5-minute candle check.";
             _items[quote.Instrument] = new InstrumentScanDto(
                 quote.Instrument, quote.Bid > 0 ? quote.Bid : null, quote.Ask > 0 ? quote.Ask : null,
-                quote.Tradeable, quote.TimeUtc, current?.ReasonUpdatedUtc, explanation);
+                quote.Tradeable, quote.TimeUtc, current?.ReasonUpdatedUtc, explanation, current?.Indicators);
         }
     }
 
@@ -30,7 +33,19 @@ public sealed class ScanStatusStore
             _items.TryGetValue(instrument, out var current);
             _items[instrument] = new InstrumentScanDto(
                 instrument, current?.Bid, current?.Ask, current?.Tradeable, current?.PriceTimeUtc,
-                evaluatedUtc, explanation);
+                evaluatedUtc, explanation, current?.Indicators);
+        }
+    }
+
+    public void SetIndicators(string instrument, IndicatorSeriesSnapshot indicators, DateTime updatedUtc)
+    {
+        lock (_gate)
+        {
+            _items.TryGetValue(instrument, out var current);
+            _items[instrument] = new InstrumentScanDto(
+                instrument, current?.Bid, current?.Ask, current?.Tradeable, current?.PriceTimeUtc,
+                current?.ReasonUpdatedUtc, current?.Explanation ?? "Waiting for the first completed 5-minute candle check.",
+                new InstrumentIndicatorSnapshot(indicators, updatedUtc));
         }
     }
 

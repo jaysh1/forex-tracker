@@ -15,7 +15,11 @@ public sealed record ForexDashboardDto(
 
 public sealed record MarketCheckView(
     string Instrument, string BidText, string AskText, string Explanation,
-    string PriceTimeText, string ReasonUpdatedText);
+    string PriceTimeText, string ReasonUpdatedText, IndicatorChartView? Indicators);
+
+public sealed record IndicatorChartView(
+    decimal?[] Ema50, decimal?[] Ema200, decimal?[] Rsi,
+    string Ema50Text, string Ema200Text, string RsiText, string UpdatedText);
 
 public sealed record ForexProposalView(
     string Id, string Instrument, string SideLabel, string SideClass, bool ConfirmationArmed,
@@ -88,7 +92,13 @@ public sealed class DashboardPresenter
     private MarketCheckView Instrument(InstrumentScanDto item) => new(
         item.Instrument.Replace('_', '/'), Price(item.Bid, 5), Price(item.Ask, 5), item.Explanation,
         item.PriceTimeUtc is { } priceTime ? LocalTime(priceTime) : "not available",
-        item.ReasonUpdatedUtc is { } updated ? LocalTime(updated) : "not yet checked");
+        item.ReasonUpdatedUtc is { } updated ? LocalTime(updated) : "not yet checked",
+        item.Indicators is { } indicators ? new IndicatorChartView(
+            indicators.Series.Ema50, indicators.Series.Ema200, indicators.Series.Rsi,
+            Price(indicators.Series.Ema50.LastOrDefault(x => x.HasValue), 5),
+            Price(indicators.Series.Ema200.LastOrDefault(x => x.HasValue), 5),
+            indicators.Series.Rsi.LastOrDefault(x => x.HasValue) is { } rsi ? rsi.ToString("F1", DisplayCulture) : "—",
+            LocalTime(indicators.UpdatedUtc)) : null);
 
     private ForexProposalView Proposal(TradeProposal p, string? currency, bool confirmationArmed) => new(
         p.Id, p.Instrument, p.Side.ToString().ToUpperInvariant(), SideClass(p.Side.ToString()), confirmationArmed,

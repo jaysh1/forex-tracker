@@ -203,7 +203,7 @@ public class TradingHoursEnforcementTests
     }
 
     [Fact]
-    public async Task Scanner_OutsideHours_SkipsCandles_ButKeepsTheStatusFresh_AndLogsTransitions()
+    public async Task Scanner_OutsideHours_RefreshesIndicatorHistoryButKeepsEntriesDisabled_AndLogsTransitions()
     {
         var h = MakeHarness(Closed);
         var env = new Dictionary<string, string>
@@ -217,7 +217,7 @@ public class TradingHoursEnforcementTests
             NullLogger<TechnicalAnalyticsAgent>.Instance, scanStatus);
 
         await scanner.TickAsync(CancellationToken.None);
-        Assert.Equal(0, h.Broker.CandleCalls);
+        Assert.Equal(2, h.Broker.CandleCalls);                       // M5 history is read for chart data only.
         Assert.NotNull(h.Agent.LastStatus);                          // the page still gets account figures
         Assert.True(h.ActivityMentions("Outside trading hours"));
         Assert.Contains(scanStatus.Snapshot(), s => s.Instrument == "EUR_USD" &&
@@ -225,19 +225,57 @@ public class TradingHoursEnforcementTests
         Assert.Contains(h.Activity.Snapshot(), a => a.Kind == "scan" && a.Text.Contains("EUR/USD check: bid 1.08500, ask 1.08504") &&
             a.Text.Contains("trading hours are closed"));
         Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "scan"));
+        Assert.Empty(h.Store.Snapshot());                            // closed hours never create an entry proposal
 
         await scanner.TickAsync(CancellationToken.None);             // no change: no repeated message
+        Assert.Equal(2, h.Broker.CandleCalls);                        // indicator polling is throttled while closed
         Assert.Equal(1, h.Activity.Snapshot().Count(a => a.Kind == "hours"));
         Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "scan"));
 
         h.Clock.Set(Open);
         await scanner.TickAsync(CancellationToken.None);
-        Assert.Equal(2, h.Broker.CandleCalls);                       // one M5 request per instrument
+        Assert.Equal(4, h.Broker.CandleCalls);                       // one additional M5 request per instrument
         Assert.True(h.ActivityMentions("Trading hours started"));
         Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "hours"));
         Assert.Contains(scanStatus.Snapshot(), s => s.Instrument == "EUR_USD" &&
             s.Explanation.Contains("no completed 5-minute candles"));
         Assert.Contains(h.Activity.Snapshot(), a => a.Kind == "scan" && a.Text.Contains("EUR/USD check: bid 1.08500, ask 1.08504") &&
             a.Text.Contains("no completed 5-minute candles"));
+    }
+
+    [Fact]
+    public async Task Scanner_ActivityShowsHistoricalCandlesAndIndicatorValues()
+    {
+        var h = MakeHarness(Closed);
+        var m5 = Enumerable.Range(0, 150).Select(i =>
+        {
+            var close = 1.0m + i * 0.0001m;
+            return new Candle(DateTime.UnixEpoch.AddMinutes(i * 5), close, close + 0.0001m, close - 0.0001m, close);
+        }).ToList();
+        var m15 = Enumerable.Range(0, 500).Select(i =>
+        {
+            var close = 1.0m + i * 0.0002m;
+            return new Candle(DateTime.UnixEpoch.AddMinutes(i * 15), close, close + 0.0001m, close - 0.0001m, close);
+        }).ToList();
+        h.Broker.CandleFactory = (_, granularity, _) => granularity == "M5" ? m5 : m15;
+
+        var env = new Dictionary<string, string>
+        {
+            ["OANDA_API_TOKEN"] = "t", ["OANDA_ACCOUNT_ID"] = "101-001-1-001", ["APPROVER_PASSWORD"] = "a-long-enough-password"
+        };
+        var config = AppConfig.FromEnvironment(k => env.GetValueOrDefault(k));
+        var scanStatus = new ScanStatusStore();
+        var scanner = new TechnicalAnalyticsAgent(
+            h.Broker, h.Agent, config, h.Activity, config.TradingHours, h.Clock,
+            NullLogger<TechnicalAnalyticsAgent>.Instance, scanStatus);
+
+        await scanner.TickAsync(CancellationToken.None);
+
+        Assert.All(scanStatus.Snapshot(), pair => Assert.NotNull(pair.Indicators));
+        Assert.Contains(h.Activity.Snapshot(), item => item.Kind == "scan" &&
+            item.Text.Contains("Scanned candle history: M5 150") && item.Text.Contains("M15 500") &&
+            item.Text.Contains("EMA50") && item.Text.Contains("EMA200") && item.Text.Contains("RSI14") &&
+            item.Text.Contains("trading hours are closed"));
+        Assert.Empty(h.Store.Snapshot());
     }
 }

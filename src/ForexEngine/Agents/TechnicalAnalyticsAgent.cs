@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace ForexHitl;
 
 /// <summary>
@@ -17,11 +19,15 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
     private readonly TimeProvider _time;
     private readonly ScanStatusStore? _scanStatus;
     private readonly Dictionary<string, DateTime> _lastCandle = new();
+    private readonly Dictionary<string, DateTime> _lastIndicatorCandle = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _lastIndicatorPollUtc = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _lastScannedHistorySummary = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (string Explanation, DateTime LoggedUtc)> _lastActivityCheck = new(StringComparer.OrdinalIgnoreCase);
     private string? _lastError;
     private DateTime _lastErrorAtUtc = DateTime.MinValue;
     private bool? _wasInHours;
     private static readonly TimeSpan RepeatCheckAfter = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan IndicatorPollInterval = TimeSpan.FromMinutes(1);
 
     public TechnicalAnalyticsAgent(
         IBrokerClient broker, ExecutionAgent execution, AppConfig config, ActivityLog activity,
@@ -106,9 +112,9 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
             : $"Outside trading hours ({_window.Describe()}) - not scanning for signals. Open trades keep their stop loss and take profit.");
     }
 
-    private void RecordInstrumentCheck(Quote quote, string explanation, DateTime nowUtc)
+    private void RecordInstrumentCheck(Quote quote, string explanation, DateTime nowUtc, bool logEveryCheck = false)
     {
-        if (_lastActivityCheck.TryGetValue(quote.Instrument, out var previous) &&
+        if (!logEveryCheck && _lastActivityCheck.TryGetValue(quote.Instrument, out var previous) &&
             previous.Explanation == explanation && nowUtc - previous.LoggedUtc < RepeatCheckAfter)
             return;
 
@@ -120,10 +126,45 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
         _activity.Add("scan", $"{name} check: bid {bid}, ask {ask} ({tradeability}). {explanation}");
     }
 
-    private void SetInstrumentExplanation(Quote quote, string explanation, DateTime nowUtc)
+    private void SetInstrumentExplanation(Quote quote, string explanation, DateTime nowUtc, bool logEveryCheck = false)
     {
         _scanStatus?.SetExplanation(quote.Instrument, explanation, nowUtc);
-        RecordInstrumentCheck(quote, explanation, nowUtc);
+        RecordInstrumentCheck(quote, explanation, nowUtc, logEveryCheck);
+    }
+
+    private static string ScannedHistorySummary(
+        IReadOnlyList<Candle> m5, IReadOnlyList<Candle> m15, IndicatorSeriesSnapshot? indicators)
+    {
+        static string CandleLabel(Candle candle) =>
+            $"{candle.TimeUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} UTC close {candle.Close.ToString("F5", CultureInfo.InvariantCulture)}";
+
+        var latestM5 = m5.Count > 0 ? CandleLabel(m5[^1]) : "unavailable";
+        var latestM15 = m15.Count > 0 ? CandleLabel(m15[^1]) : "unavailable";
+        if (indicators is null)
+            return $"Scanned candle history: M5 {m5.Count} (latest {latestM5}), M15 {m15.Count} (latest {latestM15}). " +
+                   $"EMA/RSI needs at least {SignalEngine.RsiPeriod + 2} completed M5 candles and {SignalEngine.SlowEma} completed M15 candles.";
+
+        var ema50 = indicators.Ema50.LastOrDefault(value => value.HasValue);
+        var ema200 = indicators.Ema200.LastOrDefault(value => value.HasValue);
+        var previousRsi = indicators.Rsi.Length > 1 ? indicators.Rsi[^2] : null;
+        var currentRsi = indicators.Rsi.LastOrDefault(value => value.HasValue);
+        return $"Scanned candle history: M5 {m5.Count} (latest {latestM5}), M15 {m15.Count} (latest {latestM15}). " +
+               $"EMA50 {ema50?.ToString("F5", CultureInfo.InvariantCulture) ?? "—"}; " +
+               $"EMA200 {ema200?.ToString("F5", CultureInfo.InvariantCulture) ?? "—"}; " +
+               $"RSI14 {previousRsi?.ToString("F1", CultureInfo.InvariantCulture) ?? "—"} → " +
+               $"{currentRsi?.ToString("F1", CultureInfo.InvariantCulture) ?? "—"}.";
+    }
+
+    private void RecordUnchangedCandlePoll(Quote quote, IReadOnlyList<Candle> m5, DateTime nowUtc)
+    {
+        var latest = m5[^1].TimeUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
+        var previous = _scanStatus?.Snapshot().FirstOrDefault(item =>
+            item.Instrument.Equals(quote.Instrument, StringComparison.OrdinalIgnoreCase))?.Explanation;
+        var bid = quote.Bid.ToString("F5", CultureInfo.InvariantCulture);
+        var ask = quote.Ask.ToString("F5", CultureInfo.InvariantCulture);
+        var name = quote.Instrument.Replace('_', '/');
+        _activity.Add("scan", $"{name} poll: bid {bid}, ask {ask}; latest completed M5 candle {latest} is unchanged, so no new entry evaluation. Last scan: {previous ?? "waiting for indicator history"}");
+        _lastActivityCheck[quote.Instrument] = (previous ?? "", nowUtc);
     }
 
     public async Task TickAsync(CancellationToken ct)
@@ -143,48 +184,71 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
                 var now = _time.GetUtcNow().UtcDateTime;
                 _scanStatus?.SetPrice(quote);
 
-                if (!inHours)
-                {
-                    SetInstrumentExplanation(quote,
-                        $"Not checking for entries: trading hours are closed ({_window.Describe()}).", now);
+                var canScanForEntries = inHours && status.CanTrade && quote.Tradeable;
+                if (!canScanForEntries && _lastIndicatorPollUtc.TryGetValue(instrument, out var lastIndicatorPoll) &&
+                    now - lastIndicatorPoll < IndicatorPollInterval)
                     continue;
-                }
-                if (!status.CanTrade)
-                {
-                    SetInstrumentExplanation(quote,
-                        $"Not checking for entries: {status.Reason ?? "trading is paused by the risk guard."}", now);
-                    continue;
-                }
-                if (!quote.Tradeable)
-                {
-                    SetInstrumentExplanation(quote, "OANDA reports this market is not tradeable right now.", now);
-                    continue;
-                }
+                if (!canScanForEntries) _lastIndicatorPollUtc[instrument] = now;
 
                 var m5 = await _broker.GetCandlesAsync(instrument, "M5", 150, ct);
                 if (m5.Count == 0)
                 {
-                    SetInstrumentExplanation(quote, "OANDA returned no completed 5-minute candles.", now);
+                    var candleExplanation = canScanForEntries
+                        ? "OANDA returned no completed 5-minute candles."
+                        : $"{EntryScanPauseReason(inHours, status.CanTrade, quote.Tradeable, status.Reason)} No completed 5-minute candles are available for indicator charts.";
+                    SetInstrumentExplanation(quote, candleExplanation, now, logEveryCheck: true);
                     continue;
                 }
 
                 var latest = m5[^1].TimeUtc;
+                if (!canScanForEntries)
+                {
+                    string historySummary;
+                    if (!_lastIndicatorCandle.TryGetValue(instrument, out var previousIndicatorCandle) || latest > previousIndicatorCandle)
+                    {
+                        var displayM15 = await _broker.GetCandlesAsync(instrument, "M15", 500, ct);
+                        var displayIndicators = SignalEngine.BuildIndicatorSeries(m5, displayM15);
+                        _lastIndicatorCandle[instrument] = latest;
+                        historySummary = ScannedHistorySummary(m5, displayM15, displayIndicators);
+                        _lastScannedHistorySummary[instrument] = historySummary;
+                        if (displayIndicators is not null) _scanStatus?.SetIndicators(instrument, displayIndicators, now);
+                    }
+                    else historySummary = _lastScannedHistorySummary.GetValueOrDefault(instrument) ??
+                        $"No new M5 candle; latest completed candle is {latest.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} UTC.";
+
+                    SetInstrumentExplanation(quote,
+                        $"{historySummary} {EntryScanPauseReason(inHours, status.CanTrade, quote.Tradeable, status.Reason)}",
+                        now, logEveryCheck: true);
+                    continue;
+                }
+
                 var seen = _lastCandle.TryGetValue(instrument, out var prev);
                 _lastCandle[instrument] = latest;
+                if (seen && latest <= prev)
+                {
+                    RecordUnchangedCandlePoll(quote, m5, now);
+                    continue; // The chart and setup remain current until the next completed candle.
+                }
+
+                var m15 = await _broker.GetCandlesAsync(instrument, "M15", 500, ct);
+                var indicators = SignalEngine.BuildIndicatorSeries(m5, m15);
+                _lastIndicatorCandle[instrument] = latest;
+                var scanSummary = ScannedHistorySummary(m5, m15, indicators);
+                _lastScannedHistorySummary[instrument] = scanSummary;
+                if (indicators is not null) _scanStatus?.SetIndicators(instrument, indicators, now);
                 if (!seen)
                 {
                     SetInstrumentExplanation(quote,
-                        "Price is updating. Waiting for the next completed 5-minute candle before evaluating a new entry.", now);
+                        $"{scanSummary} Historical chart data loaded. Waiting for the next completed 5-minute candle before evaluating an entry.",
+                        now, logEveryCheck: true);
                     continue;
                 }
-                if (latest <= prev) continue; // The stored setup explanation remains current until the next completed candle.
 
-                var m15 = await _broker.GetCandlesAsync(instrument, "M15", 500, ct);
                 var evaluation = SignalEngine.EvaluateWithReason(m5, m15);
                 var explanation = evaluation.Signal is { } signal
                     ? await _execution.ProposeAsync(instrument, signal, ct)
                     : evaluation.Explanation;
-                SetInstrumentExplanation(quote, explanation, now);
+                SetInstrumentExplanation(quote, $"{scanSummary} {explanation}", now, logEveryCheck: true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -195,5 +259,13 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
                 ReportFailure($"{instrument}: {message}");
             }
         }
+    }
+
+    private string EntryScanPauseReason(bool inHours, bool canTrade, bool tradeable, string? reason)
+    {
+        if (!inHours) return $"Not checking for entries: trading hours are closed ({_window.Describe()}).";
+        if (!canTrade) return $"Not checking for entries: {reason ?? "trading is paused by the risk guard."}";
+        if (!tradeable) return "Not checking for entries: OANDA reports this market is not tradeable right now.";
+        return "Not checking for entries.";
     }
 }

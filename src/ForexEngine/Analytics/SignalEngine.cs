@@ -18,6 +18,18 @@ public static class SignalEngine
     public static Signal? Evaluate(IReadOnlyList<Candle> m5, IReadOnlyList<Candle> m15) =>
         EvaluateWithReason(m5, m15).Signal;
 
+    /// <summary>Builds the indicator values shown on the dashboard from completed candles.</summary>
+    public static IndicatorSeriesSnapshot? BuildIndicatorSeries(IReadOnlyList<Candle> m5, IReadOnlyList<Candle> m15, int points = 48)
+    {
+        if (m15.Count < SlowEma || m5.Count < RsiPeriod + 2 || points < 2) return null;
+
+        var ema50 = Indicators.Ema(m15.Select(c => c.Close).ToArray(), FastEma);
+        var ema200 = Indicators.Ema(m15.Select(c => c.Close).ToArray(), SlowEma);
+        var rsi = Indicators.Rsi(m5.Select(c => c.Close).ToArray(), RsiPeriod);
+        return new IndicatorSeriesSnapshot(ema50.TakeLast(points).ToArray(), ema200.TakeLast(points).ToArray(),
+            rsi.TakeLast(points).ToArray());
+    }
+
     /// <summary>Evaluates the setup and explains the first condition that currently prevents an entry.</summary>
     public static SignalEvaluation EvaluateWithReason(IReadOnlyList<Candle> m5, IReadOnlyList<Candle> m15)
     {
@@ -70,3 +82,4 @@ public static class SignalEngine
 }
 
 public sealed record SignalEvaluation(Signal? Signal, string Explanation);
+public sealed record IndicatorSeriesSnapshot(decimal?[] Ema50, decimal?[] Ema200, decimal?[] Rsi);

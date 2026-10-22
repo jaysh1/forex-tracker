@@ -12,6 +12,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body {
     font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -52,6 +53,18 @@ h3 { font-size: 1.1rem; margin: 0 0 8px; }
 .scan-card h3 { font-variant-numeric: tabular-nums; }
 .scan-card .grid dd { font-weight: 650; }
 .scan-times { margin: 8px 0 0; }
+.indicator-charts { display: grid; gap: 10px; margin-top: 14px; }
+.indicator-chart { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.indicator-chart h4 { margin: 0 0 4px; font-size: .9rem; }
+.indicator-chart h4 span { color: var(--muted); font-size: .75rem; font-weight: 400; }
+.indicator-values { display: flex; justify-content: space-between; gap: 8px; margin: 0; color: var(--muted); font-size: .76rem; }
+.indicator-values strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.indicator-chart svg { display: block; width: 100%; height: auto; margin-top: 4px; overflow: visible; }
+.indicator-chart svg text { fill: var(--muted); font: 11px system-ui, sans-serif; }
+.indicator-grid { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 5; }
+.rsi-guide { fill: none; stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 4; opacity: .8; }
+.rsi-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.indicator-wait { margin: 10px 0 0; font-size: .82rem; }
 
 .actions { display: flex; gap: 10px; margin-top: 14px; }
 .btn {
