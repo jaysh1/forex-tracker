@@ -28,7 +28,7 @@ h3 { font-size: 1.1rem; margin: 0 0 8px; }
 .badge.practice { background: var(--ok-bg); color: var(--buy); }
 .badge.live { background: var(--sell); color: #fff; }
 
-.market-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0 18px; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.market-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 12px 0 18px; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
 .market-tab { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
 .market-tab.selected { background: var(--accent); color: #fff; }
 .market-tab:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -85,4 +85,34 @@ h3 { font-size: 1.1rem; margin: 0 0 8px; }
 .feed time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
 .feed .executed span { color: var(--buy); font-weight: 600; }
 .feed .error span, .feed .lock span, .feed .not-filled span { color: var(--sell); }
+
+.learn-panel { display: grid; gap: 12px; }
+.learn-intro { padding: 18px; }
+.learn-intro h2 { margin: 4px 0 8px; color: var(--text); font-size: 1.2rem; letter-spacing: 0; text-transform: none; }
+.learn-intro p:last-child { margin-bottom: 0; }
+.eyebrow { margin: 0; color: var(--accent); text-transform: uppercase; font-size: .72rem; font-weight: 750; letter-spacing: .08em; }
+.lesson h3 { margin-bottom: 8px; }
+.lesson > p { margin-top: 0; }
+.chart-figure, .rsi-figure { margin: 16px 0 8px; }
+.chart-figure svg, .rsi-figure svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-figure svg text, .rsi-figure svg text { fill: var(--muted); font: 12px system-ui, sans-serif; }
+.chart-grid { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 5; }
+.chart-axis { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.price-line, .ema-fast, .ema-slow { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.price-line { stroke: var(--muted); stroke-width: 2; opacity: .65; }
+.ema-fast { stroke: #d98b00; stroke-width: 4; }
+.ema-slow { stroke: var(--accent); stroke-width: 4; }
+.chart-figure figcaption, .rsi-figure figcaption { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: .8rem; }
+.legend::before { content: ''; display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 5px; background: currentColor; }
+.price-key { color: var(--muted); } .fast-key { color: #d98b00; } .slow-key { color: var(--accent); }
+.plain-note { background: var(--bg); border-radius: 10px; padding: 10px 12px; margin: 12px 0 0 !important; }
+.rsi-buy-zone { fill: color-mix(in srgb, var(--buy) 16%, transparent); }
+.rsi-middle-zone { fill: var(--bg); }
+.rsi-sell-zone { fill: color-mix(in srgb, var(--sell) 16%, transparent); }
+.rsi-track { stroke: var(--line); stroke-width: 4; }
+.rsi-marker { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 4; }
+.rsi-dot { fill: var(--accent); stroke: var(--card); stroke-width: 3; }
+.steps { padding-left: 22px; margin: 12px 0; }
+.steps li { padding: 0 0 10px 4px; }
+.lesson .warn { margin-top: 12px; }
 
