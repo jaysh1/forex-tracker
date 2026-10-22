@@ -222,9 +222,13 @@ public class TradingHoursEnforcementTests
         Assert.True(h.ActivityMentions("Outside trading hours"));
         Assert.Contains(scanStatus.Snapshot(), s => s.Instrument == "EUR_USD" &&
             s.Bid == h.Broker.Bid && s.Ask == h.Broker.Ask && s.Explanation.Contains("hours are closed"));
+        Assert.Contains(h.Activity.Snapshot(), a => a.Kind == "scan" && a.Text.Contains("EUR/USD check: bid 1.08500, ask 1.08504") &&
+            a.Text.Contains("trading hours are closed"));
+        Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "scan"));
 
         await scanner.TickAsync(CancellationToken.None);             // no change: no repeated message
         Assert.Equal(1, h.Activity.Snapshot().Count(a => a.Kind == "hours"));
+        Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "scan"));
 
         h.Clock.Set(Open);
         await scanner.TickAsync(CancellationToken.None);
@@ -233,5 +237,7 @@ public class TradingHoursEnforcementTests
         Assert.Equal(2, h.Activity.Snapshot().Count(a => a.Kind == "hours"));
         Assert.Contains(scanStatus.Snapshot(), s => s.Instrument == "EUR_USD" &&
             s.Explanation.Contains("no completed 5-minute candles"));
+        Assert.Contains(h.Activity.Snapshot(), a => a.Kind == "scan" && a.Text.Contains("EUR/USD check: bid 1.08500, ask 1.08504") &&
+            a.Text.Contains("no completed 5-minute candles"));
     }
 }

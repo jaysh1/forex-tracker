@@ -17,9 +17,11 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
     private readonly TimeProvider _time;
     private readonly ScanStatusStore? _scanStatus;
     private readonly Dictionary<string, DateTime> _lastCandle = new();
+    private readonly Dictionary<string, (string Explanation, DateTime LoggedUtc)> _lastActivityCheck = new(StringComparer.OrdinalIgnoreCase);
     private string? _lastError;
     private DateTime _lastErrorAtUtc = DateTime.MinValue;
     private bool? _wasInHours;
+    private static readonly TimeSpan RepeatCheckAfter = TimeSpan.FromMinutes(5);
 
     public TechnicalAnalyticsAgent(
         IBrokerClient broker, ExecutionAgent execution, AppConfig config, ActivityLog activity,
@@ -104,6 +106,26 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
             : $"Outside trading hours ({_window.Describe()}) - not scanning for signals. Open trades keep their stop loss and take profit.");
     }
 
+    private void RecordInstrumentCheck(Quote quote, string explanation, DateTime nowUtc)
+    {
+        if (_lastActivityCheck.TryGetValue(quote.Instrument, out var previous) &&
+            previous.Explanation == explanation && nowUtc - previous.LoggedUtc < RepeatCheckAfter)
+            return;
+
+        _lastActivityCheck[quote.Instrument] = (explanation, nowUtc);
+        var name = quote.Instrument.Replace('_', '/');
+        var tradeability = quote.Tradeable ? "tradeable" : "not tradeable";
+        var bid = quote.Bid > 0 ? quote.Bid.ToString("F5", System.Globalization.CultureInfo.InvariantCulture) : "unavailable";
+        var ask = quote.Ask > 0 ? quote.Ask.ToString("F5", System.Globalization.CultureInfo.InvariantCulture) : "unavailable";
+        _activity.Add("scan", $"{name} check: bid {bid}, ask {ask} ({tradeability}). {explanation}");
+    }
+
+    private void SetInstrumentExplanation(Quote quote, string explanation, DateTime nowUtc)
+    {
+        _scanStatus?.SetExplanation(quote.Instrument, explanation, nowUtc);
+        RecordInstrumentCheck(quote, explanation, nowUtc);
+    }
+
     public async Task TickAsync(CancellationToken ct)
     {
         _execution.ExpireStale();
@@ -123,26 +145,26 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
 
                 if (!inHours)
                 {
-                    _scanStatus?.SetExplanation(instrument,
+                    SetInstrumentExplanation(quote,
                         $"Not checking for entries: trading hours are closed ({_window.Describe()}).", now);
                     continue;
                 }
                 if (!status.CanTrade)
                 {
-                    _scanStatus?.SetExplanation(instrument,
+                    SetInstrumentExplanation(quote,
                         $"Not checking for entries: {status.Reason ?? "trading is paused by the risk guard."}", now);
                     continue;
                 }
                 if (!quote.Tradeable)
                 {
-                    _scanStatus?.SetExplanation(instrument, "OANDA reports this market is not tradeable right now.", now);
+                    SetInstrumentExplanation(quote, "OANDA reports this market is not tradeable right now.", now);
                     continue;
                 }
 
                 var m5 = await _broker.GetCandlesAsync(instrument, "M5", 150, ct);
                 if (m5.Count == 0)
                 {
-                    _scanStatus?.SetExplanation(instrument, "OANDA returned no completed 5-minute candles.", now);
+                    SetInstrumentExplanation(quote, "OANDA returned no completed 5-minute candles.", now);
                     continue;
                 }
 
@@ -151,7 +173,7 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
                 _lastCandle[instrument] = latest;
                 if (!seen)
                 {
-                    _scanStatus?.SetExplanation(instrument,
+                    SetInstrumentExplanation(quote,
                         "Price is updating. Waiting for the next completed 5-minute candle before evaluating a new entry.", now);
                     continue;
                 }
@@ -162,14 +184,14 @@ public sealed class TechnicalAnalyticsAgent : BackgroundService
                 var explanation = evaluation.Signal is { } signal
                     ? await _execution.ProposeAsync(instrument, signal, ct)
                     : evaluation.Explanation;
-                _scanStatus?.SetExplanation(instrument, explanation, now);
+                SetInstrumentExplanation(quote, explanation, now);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log.LogError(ex, "Scan failed for {Instrument}", instrument);
                 var message = Describe(ex);
-                _scanStatus?.SetExplanation(instrument,
-                    $"Could not complete this pair's check: {message}", _time.GetUtcNow().UtcDateTime);
+                var explanation = $"Could not complete this pair's check: {message}";
+                _scanStatus?.SetExplanation(instrument, explanation, _time.GetUtcNow().UtcDateTime);
                 ReportFailure($"{instrument}: {message}");
             }
         }
