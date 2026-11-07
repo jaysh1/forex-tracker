@@ -4,7 +4,23 @@ const KEY="biima-v3-complete", $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const states=["VIC","NSW","QLD","SA","WA","TAS","ACT","NT"];
 const stages=["Safety & emergency","Accident details","Driver & vehicle","Photos & notes","Review","Submit"];
-const blank=()=>({step:0,id:"DRAFT-"+Date.now().toString(36),safe:"",injuries:"",injuryNotes:"",police:false,fire:false,ambulance:false,none:false,type:"",location:"",when:"",involved:"",people:"",name:"",mobile:"",rego:"",state:"VIC",fleet:"",source:"Manual",confirmed:false,photos:[],audio:"",language:"Punjabi",notes:"",consent:false});
+
+const regoLengths={VIC:[6],NSW:[6],QLD:[6],SA:[7],WA:[7],TAS:[5,6],ACT:[6],NT:[5,6]};
+function validateRego(raw,state,special=false){
+ const value=String(raw||"").trim().toUpperCase();
+ const compact=value.replace(/[\s-]/g,"");
+ const standard=regoLengths[state]||[6];
+ if(!compact)return {ok:false,compact,message:"Enter a vehicle registration."};
+ if(!/^[A-Z0-9 -]+$/.test(value)||!/^[A-Z0-9]+$/.test(compact))
+   return {ok:false,compact,message:"Use letters and numbers only. Spaces and hyphens are allowed as separators."};
+ if(compact.length>7)return {ok:false,compact,message:"Registration is too long ("+compact.length+" characters). Check the number or ask BIIMA to verify a special plate."};
+ if(special)return {ok:true,compact,message:"✓ Special/personalised plate: "+compact.length+" character"+(compact.length===1?"":"s")+". Confirm the registration against the physical plate."};
+ if(!standard.includes(compact.length))
+   return {ok:false,compact,message:"Standard "+state+" plates are commonly "+standard.join(" or ")+" characters. Entered: "+compact.length+". If yours is a personalised, heritage or special plate, select that option below."};
+ return {ok:true,compact,message:"✓ Registration length is consistent with a common "+state+" standard plate ("+compact.length+" characters)."};
+}
+
+const blank=()=>({step:0,id:"DRAFT-"+Date.now().toString(36),safe:"",injuries:"",injuryNotes:"",police:false,fire:false,ambulance:false,none:false,type:"",location:"",when:"",involved:"",people:"",name:"",mobile:"",rego:"",state:"VIC",fleet:"",source:"Manual",confirmed:false,photos:[],audio:"",language:"Punjabi",notes:"",consent:false,specialPlate:false});
 const initial=()=>({draft:blank(),reports:[],fleets:[{id:"f1",name:"ABC Transport",contact:"John Smith",active:true},{id:"f2",name:"XYZ Logistics",contact:"Sarah Kim",active:true}],vehicles:[{id:"v1",rego:"ABC123",fleet:"f1",type:"Truck",active:true},{id:"v2",rego:"ABC456",fleet:"f1",type:"Truck",active:true},{id:"v3",rego:"XYZ458",fleet:"f2",type:"Van",active:true}],drivers:[{id:"d1",name:"John Smith",mobile:"0412 345 678",fleet:"f1",vehicle:"v1",active:true},{id:"d2",name:"Aman Singh",mobile:"0415 333 444",fleet:"f1",vehicle:"v2",active:true},{id:"d3",name:"Sarah Kim",mobile:"0413 200 100",fleet:"f2",vehicle:"v3",active:true}],sms:[]});
 let db;try{db=JSON.parse(localStorage.getItem(KEY))||initial()}catch{db=initial()}
 for(const k of ["reports","fleets","vehicles","drivers","sms"])if(!Array.isArray(db[k]))db[k]=initial()[k];if(!db.draft)db.draft=blank();if(!Array.isArray(db.draft.photos))db.draft.photos=[];
@@ -45,7 +61,10 @@ case 2:
 html+='<div class="eyebrow">IDENTIFICATION</div><h1 class="title">Driver & vehicle details</h1><p class="muted">Enter manually, scan a vehicle QR or request a broker-verified SMS link.</p>'+cards([box("✎ Manual",method==="manual","method:manual"),box("▦ Scan QR",method==="qr","method:qr"),box("✉ SMS BIIMA",method==="sms","method:sms")],3);
 if(method==="qr")html+='<div class="panel"><b>Choose a fleet (QR simulation)</b>'+cards(db.fleets.filter(x=>x.active).map(x=>box(x.name,fleetId===x.id,"fleet:"+x.id)))+'<b>Vehicle QR</b><div class="actions">'+db.vehicles.filter(v=>v.active&&v.fleet===fleetId).map(v=>btn("▦ "+v.rego,"qr:"+v.id)).join("")+'</div><p class="hint">Public QR identifies the vehicle/fleet; personal details require verification.</p></div>';
 if(method==="sms")html+='<div class="panel"><b>Broker-verified SMS demonstration</b><p class="hint">Enter rego and/or mobile below, then simulate a verified broker reply. No real SMS is sent.</p>'+btn("Simulate broker SMS reply","smsverify","primary block")+'</div>';
-html+=(d().fleet?'<div class="panel"><b>✓ '+esc(d().fleet)+'</b></div>':"")+f("name","Driver full name","Name")+f("mobile","Mobile number","04xx xxx xxx")+f("rego","Registration","ABC123")+'<b>Registration state</b>'+opts("state",states,4)+cards([box((d().confirmed?"☑ ":"□ ")+"I confirm these details",d().confirmed,"check:confirmed")]);
+html+=(d().fleet?'<div class="panel"><b>✓ '+esc(d().fleet)+'</b></div>':"")+f("name","Driver full name","Name")+f("mobile","Mobile number","04xx xxx xxx")+f("rego","Registration","ABC123")+'<b>Registration state</b>'+opts("state",states,4)
++'<div id="rego-feedback" class="rego-feedback '+(validateRego(d().rego,d().state,d().specialPlate).ok?"valid":"invalid")+'" role="status" aria-live="polite">'+esc(validateRego(d().rego,d().state,d().specialPlate).message)+'</div>'
++'<button class="choice plate-option '+(d().specialPlate?"active":"")+'" data-act="check:specialPlate" aria-pressed="'+Boolean(d().specialPlate)+'">'+(d().specialPlate?"☑ ":"□ ")+'Personalised / heritage / special plate</button>'
++'<button class="choice confirm-card '+(d().confirmed?"active":"")+'" data-act="check:confirmed" aria-pressed="'+Boolean(d().confirmed)+'"><span class="confirm-icon">'+(d().confirmed?"☑":"□")+'</span><span class="confirm-label">I confirm these details</span></button>';
 break;
 case 3:
 html+='<div class="eyebrow">EVIDENCE</div><h1 class="title">Photos & notes</h1><p class="muted">Capture real photos and an original voice recording on your device.</p><div class="panel"><b>Photos · '+d().photos.length+'/6</b><div class="field"><label>Add photos</label><input id="photos-input" type="file" multiple accept="image/*"></div><div id="photos-preview" class="photos"></div></div>'+f("notes","Driver notes","Describe what happened",true)+'<b>Voice-note language</b>'+opts("language",["English","Punjabi","Hindi","Other"])+'<div class="panel"><b>Original voice note</b><div class="actions">'+btn(recorder?.state==="recording"?"■ Stop recording":"🎙 Record voice","record","primary")+'</div><div class="field"><label>Or attach existing audio file</label><input type="file" id="audio-input" accept="audio/*"></div><div id="audio-preview"></div></div>';
@@ -72,12 +91,18 @@ if(message)h+='<div class="notice">'+esc(message)+'</div>';h+='<p>'+btn("Sign ou
 }
 function render(){document.getElementById("root").innerHTML=section==="broker"?broker():driver();$("driver-nav").classList.toggle("active",section!=="broker");$("broker-nav").classList.toggle("active",section==="broker");if(section==="driver"&&d().step===3)loadEvidence();if(section==="broker"&&tab==="incidents"&&selected)loadBrokerEvidence()}
 function note(x){message=x;render()}
-function put(k,v){d()[k]=v;if(["name","mobile","rego","state"].includes(k))d().confirmed=false;save();render()}
+function put(k,v){d()[k]=v;if(["name","mobile","rego","state","specialPlate"].includes(k))d().confirmed=false;save();render()}
 function toggle(k){if(k==="none"){d().none=!d().none;d().police=d().fire=d().ambulance=false}else{d()[k]=!d()[k];d().none=false}save();render()}
 function next(){
 if(d().step===0&&(!d().safe||!d().injuries||(!d().none&&!d().police&&!d().fire&&!d().ambulance)))return note("Complete the safety, injuries and emergency services questions.");
 if(d().step===1&&!d().type)return note("Select incident type.");
-if(d().step===2&&(!d().name.trim()||!d().mobile.trim()||!d().rego.trim()||!d().confirmed))return note("Enter and confirm the driver's name, mobile and registration.");
+if(d().step===2){
+if(!d().name.trim()||!d().mobile.trim())return note("Enter the driver's name and mobile number.");
+const result=validateRego(d().rego,d().state,d().specialPlate);
+if(!result.ok)return note(result.message);
+if(!d().confirmed)return note("Confirm the driver and vehicle details before continuing.");
+d().rego=result.compact;
+}
 d().step=Math.min(5,d().step+1);save();message="";render();window.scrollTo(0,0)
 }
 function prefill(v,source){const x=veh(v),f=fleet(x?.fleet);if(!x)return;d().rego=x.rego;d().fleet=f?.name||"";d().source=source;d().confirmed=false;const person=db.drivers.find(p=>p.vehicle===v&&p.active);if(person){d().name=person.name;d().mobile=person.mobile}method="manual";save();note(source==="Vehicle QR"?"Demo QR lookup populated the associated driver details. In production, personal information requires verification. Please confirm.":"Demo broker verification completed. Driver details have been populated; check and confirm them.")}
@@ -138,7 +163,18 @@ else if(a==="respond"){const q=form("broker-response");if(!q)return note("Enter 
 else if(a==="ack"){changeReport({ready:false});return}
 else if(a==="approve"){changeReport({status:"Approved"});return}
 message="";render()});
-document.addEventListener("input",e=>{const k=e.target.dataset.input;if(k){d()[k]=e.target.value;if(["name","mobile","rego"].includes(k))d().confirmed=false;save()}});
+document.addEventListener("input",e=>{
+const k=e.target.dataset.input;if(!k)return;
+if(k==="rego"){e.target.value=e.target.value.toUpperCase();d()[k]=e.target.value;
+ const feedback=$("rego-feedback");if(feedback){const result=validateRego(d().rego,d().state,d().specialPlate);feedback.textContent=result.message;feedback.className="rego-feedback "+(result.ok?"valid":"invalid");}}
+else d()[k]=e.target.value;
+if(["name","mobile","rego"].includes(k)){
+ d().confirmed=false;
+ const confirmCard=document.querySelector(".confirm-card");
+ if(confirmCard){confirmCard.classList.remove("active");confirmCard.setAttribute("aria-pressed","false");const icon=confirmCard.querySelector(".confirm-icon");if(icon)icon.textContent="□";}
+}
+save();
+});
 document.addEventListener("change",e=>{if(e.target.id==="photos-input")addPhotos(e.target.files);if(e.target.id==="audio-input")addAudio(e.target.files[0])});
 render();
 })();
